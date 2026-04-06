@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tmux list-sessions:*)",
+      "Bash(tmux send-keys:*)",
+      "Bash(tmux kill-session:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(npm start:*)",
+      "Bash(tmux new-window:*)",
+      "Bash(gh pr:*)",
+      "Bash(/Applications/Claude.app/Contents/Resources/claudeCode:*)",
+      "Bash(cat /private/tmp/claude-501/-Users-wly-Desktop---1-supervisor/4e248812-414e-4f57-9a65-8008fb983e03/tasks/*.output)",
+      "Bash(/Users/wly/.nvm/versions/node/v22.22.1/bin/claude:*)",
+      "Bash(ls -la /private/tmp/claude-501/-Users-wly-Desktop---1-supervisor/4e248812-414e-4f57-9a65-8008fb983e03/tasks/*.output)",
+      "Bash(node server.js)",
+      "Bash(xargs kill:*)",
+      "Bash(npx skills:*)",
+      "Bash(playwright install:*)",
+      "Bash(npx playwright:*)",
+      "Bash(next-browser open:*)",
+      "Bash(next-browser screenshot:*)",
+      "Bash(next-browser snapshot:*)",
+      "Bash(next-browser goto:*)",
+      "Bash(next-browser close:*)",
+      "Bash(chmod +x:*)",
+      "Bash(./enable-bypass-permissions.sh:*)",
+      "Bash(next-browser eval:*)",
+      "Bash(next-browser --help)",
+      "Bash(curl -s http://localhost:9222/json/version)",
+      "Bash(curl -s http://localhost:9222/json)",
+      "Bash(curl -v http://localhost:9222/json/version)",
+      "Bash(curl:*)",
+      "Bash(nc -zv 127.0.0.1 9222)",
+      "Bash(npx playwright@latest test --version)",
+      "Bash(next-browser push:*)"
+    ],
+    "defaultMode": "bypassPermissions"
+  }
+}
