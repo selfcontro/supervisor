@@ -14,10 +14,8 @@ class FakeCodexClient extends EventEmitter {
   constructor() {
     super()
     this.started = false
-    this.responses = {
-      thread: { threadId: 'thread_test_1' },
-      turn: { turnId: 'turn_test_1' }
-    }
+    this.threadCounter = 0
+    this.turnCounter = 0
   }
 
   async start() {
@@ -29,11 +27,13 @@ class FakeCodexClient extends EventEmitter {
   }
 
   async startThread() {
-    return this.responses.thread
+    this.threadCounter += 1
+    return { threadId: `thread_test_${this.threadCounter}` }
   }
 
   async startTurn() {
-    return this.responses.turn
+    this.turnCounter += 1
+    return { turnId: `turn_test_${this.turnCounter}` }
   }
 
   async interruptTurn() {
@@ -166,6 +166,67 @@ test('captures command execution from notifications', async () => {
   const emitted = harness.events.filter(event => event.type === 'command_execution')
   assert.equal(emitted.length, 1)
   assert.equal(emitted[0].payload.command, 'echo test')
+
+  await harness.orchestrator.stop()
+  await fs.rm(harness.tmpDir, { recursive: true, force: true })
+})
+
+test('renders a team onboarding checklist card in session blackboard markdown', async () => {
+  const harness = await createHarness()
+
+  const dispatch = await harness.orchestrator.dispatchTask('sessionC', 'agent-main', {
+    title: 'Tiny onboarding checklist',
+    prompt: 'Create a tiny onboarding checklist card and run it through the agent team.'
+  })
+
+  let markdown = await harness.orchestrator.getSessionMarkdown('sessionC')
+  assert.match(markdown, /## Team Checklist Cards/)
+  assert.match(markdown, /### Tiny onboarding checklist/)
+  assert.match(markdown, /- \[ \] Planning/)
+  assert.match(markdown, /- \[ \] Execution/)
+  assert.match(markdown, /- \[ \] Review/)
+
+  await harness.orchestrator.handleNotification({
+    method: 'turn/completed',
+    params: {
+      threadId: harness.orchestrator.registry.getAgent('sessionC', 'planner').threadId,
+      turnId: harness.orchestrator.registry.getAgent('sessionC', 'planner').activeTurnId,
+      turn: {
+        outputText: 'Plan ready'
+      }
+    }
+  })
+
+  markdown = await harness.orchestrator.getSessionMarkdown('sessionC')
+  assert.match(markdown, /- \[x\] Planning/)
+  assert.match(markdown, /- \[ \] Execution/)
+
+  await harness.orchestrator.handleNotification({
+    method: 'turn/completed',
+    params: {
+      threadId: harness.orchestrator.registry.getAgent('sessionC', 'executor').threadId,
+      turnId: harness.orchestrator.registry.getAgent('sessionC', 'executor').activeTurnId,
+      turn: {
+        outputText: 'Execution done'
+      }
+    }
+  })
+
+  await harness.orchestrator.handleNotification({
+    method: 'turn/completed',
+    params: {
+      threadId: harness.orchestrator.registry.getAgent('sessionC', 'reviewer').threadId,
+      turnId: harness.orchestrator.registry.getAgent('sessionC', 'reviewer').activeTurnId,
+      turn: {
+        outputText: 'Review approved'
+      }
+    }
+  })
+
+  markdown = await harness.orchestrator.getSessionMarkdown('sessionC')
+  assert.match(markdown, /- \[x\] Planning/)
+  assert.match(markdown, /- \[x\] Execution/)
+  assert.match(markdown, /- \[x\] Review/)
 
   await harness.orchestrator.stop()
   await fs.rm(harness.tmpDir, { recursive: true, force: true })

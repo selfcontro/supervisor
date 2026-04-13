@@ -10,6 +10,8 @@ class CodexOrchestrator {
     this.broadcast = options.broadcast
     this.autoApprovalMode = process.env.CODEX_AUTO_APPROVAL_MODE || 'manual'
     this.commandRuns = new Map()
+    this.teamWorkflows = new Map()
+    this.teamTaskIndex = new Map()
     this.started = false
 
     if (this.sessionStore && typeof this.sessionStore.setRuntimeAgentProvider === 'function') {
@@ -97,13 +99,21 @@ class CodexOrchestrator {
       return {
         ...agent,
         name: agent.agentId,
-        role: 'Codex controlled agent',
+        role: getAgentRole(agent.agentId),
         currentTask: activeTask ? activeTask.title : null
       }
     })
   }
 
   async dispatchTask(sessionId, agentId, payload = {}) {
+    if (agentId === 'agent-main') {
+      return this.dispatchTeamTask(sessionId, payload)
+    }
+
+    return this.dispatchDirectTask(sessionId, agentId, payload)
+  }
+
+  async dispatchDirectTask(sessionId, agentId, payload = {}) {
     this.ensureStarted()
     const prompt = typeof payload.prompt === 'string' ? payload.prompt.trim() : ''
     if (!prompt) {
@@ -193,6 +203,301 @@ class CodexOrchestrator {
       threadId: runtimeAgent.threadId,
       status: 'accepted'
     }
+  }
+
+  async dispatchTeamTask(sessionId, payload = {}) {
+    this.ensureStarted()
+    const prompt = typeof payload.prompt === 'string' ? payload.prompt.trim() : ''
+    if (!prompt) {
+      throw new Error('Prompt is required')
+    }
+
+    const title = typeof payload.title === 'string' && payload.title.trim()
+      ? payload.title.trim()
+      : prompt.slice(0, 80)
+
+    const coordinator = await this.createOrActivateAgent(sessionId, 'agent-main', {
+      harness: payload.harness || {}
+    })
+    await this.ensureTeamSubagents(coordinator.sessionId, payload.harness || {})
+
+    const parentTaskId = payload.taskId || `codex_task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    const createdAt = new Date().toISOString()
+    const parentTask = {
+      taskId: parentTaskId,
+      title,
+      prompt,
+      status: 'planning',
+      attempt: 1,
+      priority: payload.priority || 'normal',
+      createdAt,
+      updatedAt: createdAt,
+      turnHistory: [],
+      subTasks: buildWorkflowSubTaskIds(parentTaskId)
+    }
+
+    this.registry.addTask(coordinator.sessionId, coordinator.agentId, parentTask)
+    this.registry.setActiveTask(coordinator.sessionId, coordinator.agentId, parentTaskId)
+    this.registry.updateAgentState(coordinator.sessionId, coordinator.agentId, 'working', null)
+    this.syncRuntimeTaskToSession(coordinator.sessionId, coordinator.agentId, parentTask)
+    this.emitAgentStatus(serializeAgent(this.registry.getAgent(coordinator.sessionId, coordinator.agentId)))
+
+    await this.blackboard.appendEvent({
+      sessionId: coordinator.sessionId,
+      agentId: coordinator.agentId,
+      threadId: this.registry.getAgent(coordinator.sessionId, coordinator.agentId)?.threadId,
+      type: 'task_assigned',
+      task: {
+        taskId: parentTaskId,
+        title,
+        status: 'planning',
+        priority: parentTask.priority
+      },
+      payload: {
+        prompt,
+        orchestration: 'agent_team'
+      },
+      idempotencyKey: `${coordinator.sessionId}:${coordinator.agentId}:${parentTaskId}:assigned`
+    })
+
+    const workflow = {
+      sessionId: coordinator.sessionId,
+      parentTaskId,
+      parentAgentId: coordinator.agentId,
+      title,
+      prompt,
+      priority: parentTask.priority,
+      stages: ['planner', 'executor', 'reviewer'],
+      stageTaskIds: new Map(),
+      stageResults: new Map()
+    }
+
+    this.trackWorkflow(workflow, parentTaskId)
+    await this.startWorkflowStage(workflow, 'planner')
+
+    return {
+      taskId: parentTaskId,
+      turnId: null,
+      threadId: this.registry.getAgent(coordinator.sessionId, coordinator.agentId)?.threadId || null,
+      status: 'accepted'
+    }
+  }
+
+  async ensureTeamSubagents(sessionId, harness = {}) {
+    await Promise.all(['planner', 'executor', 'reviewer'].map((agentId) => {
+      return this.createOrActivateAgent(sessionId, agentId, { harness })
+    }))
+  }
+
+  async startWorkflowStage(workflow, stageAgentId) {
+    const stageTitle = `${workflow.title} · ${humanizeStage(stageAgentId)}`
+    const stageTaskId = `${workflow.parentTaskId}:${stageAgentId}`
+    const stagePrompt = this.buildStagePrompt(workflow, stageAgentId)
+    const stageAgent = await this.createOrActivateAgent(workflow.sessionId, stageAgentId)
+    const runtimeAgent = this.registry.getAgent(workflow.sessionId, stageAgentId)
+    const parentStatus = parentStatusForStage(stageAgentId)
+    const createdAt = new Date().toISOString()
+    const stageTask = {
+      taskId: stageTaskId,
+      title: stageTitle,
+      prompt: stagePrompt,
+      status: 'assigned',
+      attempt: 1,
+      priority: workflow.priority,
+      createdAt,
+      updatedAt: createdAt,
+      turnHistory: [],
+      parentTaskId: workflow.parentTaskId
+    }
+
+    workflow.stageTaskIds.set(stageAgentId, stageTaskId)
+    this.trackWorkflow(workflow, stageTaskId)
+    this.registry.addTask(workflow.sessionId, stageAgentId, stageTask)
+    this.registry.setActiveTask(workflow.sessionId, stageAgentId, stageTaskId)
+    this.registry.updateTask(workflow.sessionId, workflow.parentAgentId, workflow.parentTaskId, {
+      status: parentStatus,
+      subTasks: buildWorkflowSubTaskIds(workflow.parentTaskId)
+    })
+    this.syncRuntimeTaskToSession(
+      workflow.sessionId,
+      workflow.parentAgentId,
+      this.registry.getTask(workflow.sessionId, workflow.parentAgentId, workflow.parentTaskId)
+    )
+
+    await this.blackboard.appendEvent({
+      sessionId: workflow.sessionId,
+      agentId: stageAgentId,
+      threadId: runtimeAgent.threadId,
+      type: 'task_assigned',
+      task: {
+        taskId: stageTaskId,
+        title: stageTitle,
+        status: 'assigned',
+        priority: workflow.priority
+      },
+      payload: {
+        prompt: stagePrompt,
+        parentTaskId: workflow.parentTaskId,
+        orchestration: 'agent_team'
+      },
+      idempotencyKey: `${workflow.sessionId}:${stageAgentId}:${stageTaskId}:assigned`
+    })
+
+    const turnResult = await this.client.startTurn({
+      threadId: runtimeAgent.threadId,
+      input: [{
+        type: 'text',
+        text: stagePrompt
+      }]
+    })
+
+    const turnId = extractTurnId(turnResult)
+    this.registry.updateAgentState(workflow.sessionId, stageAgentId, 'working', turnId)
+    this.registry.updateTask(workflow.sessionId, stageAgentId, stageTaskId, {
+      status: 'executing',
+      turnId,
+      turnHistory: [turnId].filter(Boolean)
+    })
+
+    const syncedStageTask = this.registry.getTask(workflow.sessionId, stageAgentId, stageTaskId)
+    this.syncRuntimeTaskToSession(workflow.sessionId, stageAgentId, syncedStageTask)
+    this.emitTaskUpdate(workflow.sessionId, workflow.parentTaskId, {
+      status: parentStatus,
+      stage: stageAgentId,
+      updatedAt: new Date().toISOString(),
+      agentId: workflow.parentAgentId
+    })
+    this.emitTaskUpdate(workflow.sessionId, stageTaskId, {
+      status: 'executing',
+      turnId,
+      updatedAt: new Date().toISOString(),
+      agentId: stageAgentId,
+      parentTaskId: workflow.parentTaskId
+    })
+    this.emitAgentStatus(serializeAgent(this.registry.getAgent(workflow.sessionId, workflow.parentAgentId)))
+    this.emitAgentStatus(serializeAgent(this.registry.getAgent(workflow.sessionId, stageAgentId)))
+
+    return {
+      taskId: stageTaskId,
+      threadId: runtimeAgent.threadId,
+      turnId
+    }
+  }
+
+  buildStagePrompt(workflow, stageAgentId) {
+    const plan = workflow.stageResults.get('planner') || ''
+    const execution = workflow.stageResults.get('executor') || ''
+
+    if (stageAgentId === 'planner') {
+      return [
+        'You are the planning specialist in a Codex agent team.',
+        `Parent task: ${workflow.title}`,
+        `User request: ${workflow.prompt}`,
+        'Produce a concise execution plan, success criteria, and handoff notes for the executor.'
+      ].join('\n\n')
+    }
+
+    if (stageAgentId === 'executor') {
+      return [
+        'You are the execution specialist in a Codex agent team.',
+        `Parent task: ${workflow.title}`,
+        `User request: ${workflow.prompt}`,
+        `Planner output:\n${plan || 'No planner output provided.'}`,
+        'Carry out the implementation or analysis requested. End with a concise execution summary for the reviewer.'
+      ].join('\n\n')
+    }
+
+    return [
+      'You are the reviewer in a Codex agent team.',
+      `Parent task: ${workflow.title}`,
+      `User request: ${workflow.prompt}`,
+      `Planner output:\n${plan || 'No planner output provided.'}`,
+      `Executor output:\n${execution || 'No executor output provided.'}`,
+      'Review the work, identify risks, and state whether the result is ready.'
+    ].join('\n\n')
+  }
+
+  trackWorkflow(workflow, taskId) {
+    this.teamWorkflows.set(workflowKey(workflow.sessionId, workflow.parentTaskId), workflow)
+    this.teamTaskIndex.set(workflowTaskKey(workflow.sessionId, taskId), workflow.parentTaskId)
+  }
+
+  getWorkflowForTask(sessionId, taskId) {
+    const parentTaskId = this.teamTaskIndex.get(workflowTaskKey(sessionId, taskId))
+    if (!parentTaskId) {
+      return null
+    }
+
+    return this.teamWorkflows.get(workflowKey(sessionId, parentTaskId)) || null
+  }
+
+  async advanceWorkflowOnCompletion(agent, task, result) {
+    const workflow = this.getWorkflowForTask(agent.sessionId, task.taskId)
+    if (!workflow || task.taskId === workflow.parentTaskId) {
+      return
+    }
+
+    workflow.stageResults.set(agent.agentId, result || '')
+    const currentStageIndex = workflow.stages.indexOf(agent.agentId)
+    const nextStageId = workflow.stages[currentStageIndex + 1] || null
+
+    if (nextStageId) {
+      await this.startWorkflowStage(workflow, nextStageId)
+      return
+    }
+
+    const parentResult = workflow.stages
+      .map((stageId) => `${humanizeStage(stageId)}\n${workflow.stageResults.get(stageId) || ''}`.trim())
+      .join('\n\n')
+
+    const updatedParentTask = this.registry.updateTask(workflow.sessionId, workflow.parentAgentId, workflow.parentTaskId, {
+      status: 'completed',
+      result: parentResult,
+      subTasks: buildWorkflowSubTaskIds(workflow.parentTaskId)
+    })
+
+    if (updatedParentTask) {
+      this.syncRuntimeTaskToSession(workflow.sessionId, workflow.parentAgentId, updatedParentTask)
+      this.emitTaskUpdate(workflow.sessionId, workflow.parentTaskId, {
+        status: 'completed',
+        result: updatedParentTask.result,
+        updatedAt: updatedParentTask.updatedAt,
+        agentId: workflow.parentAgentId
+      })
+    }
+
+    this.registry.setActiveTask(workflow.sessionId, workflow.parentAgentId, null)
+    this.registry.updateAgentState(workflow.sessionId, workflow.parentAgentId, 'idle', null)
+    this.emitAgentStatus(serializeAgent(this.registry.getAgent(workflow.sessionId, workflow.parentAgentId)))
+    this.teamWorkflows.delete(workflowKey(workflow.sessionId, workflow.parentTaskId))
+  }
+
+  async failWorkflow(agent, task, error) {
+    const workflow = this.getWorkflowForTask(agent.sessionId, task.taskId)
+    if (!workflow || task.taskId === workflow.parentTaskId) {
+      return
+    }
+
+    const updatedParentTask = this.registry.updateTask(workflow.sessionId, workflow.parentAgentId, workflow.parentTaskId, {
+      status: 'failed',
+      error,
+      subTasks: buildWorkflowSubTaskIds(workflow.parentTaskId)
+    })
+
+    if (updatedParentTask) {
+      this.syncRuntimeTaskToSession(workflow.sessionId, workflow.parentAgentId, updatedParentTask)
+      this.emitTaskUpdate(workflow.sessionId, workflow.parentTaskId, {
+        status: 'failed',
+        error,
+        updatedAt: updatedParentTask.updatedAt,
+        agentId: workflow.parentAgentId
+      })
+    }
+
+    this.registry.setActiveTask(workflow.sessionId, workflow.parentAgentId, null)
+    this.registry.updateAgentState(workflow.sessionId, workflow.parentAgentId, 'error', null)
+    this.emitAgentStatus(serializeAgent(this.registry.getAgent(workflow.sessionId, workflow.parentAgentId)))
+    this.teamWorkflows.delete(workflowKey(workflow.sessionId, workflow.parentTaskId))
   }
 
   async interrupt(sessionId, agentId) {
@@ -508,10 +813,12 @@ class CodexOrchestrator {
     }
 
     if (method === 'turn/completed') {
+      const turnResult = extractTurnResult(params)
+
       if (task) {
         const updatedTask = this.registry.updateTask(agent.sessionId, agent.agentId, task.taskId, {
           status: 'completed',
-          result: extractTurnResult(params)
+          result: turnResult
         })
         this.syncRuntimeTaskToSession(agent.sessionId, agent.agentId, updatedTask)
 
@@ -528,7 +835,7 @@ class CodexOrchestrator {
             priority: task.priority
           },
           payload: {
-            result: extractTurnResult(params)
+            result: turnResult
           },
           idempotencyKey: `${threadId}:${turnId}:turn_completed`
         })
@@ -545,14 +852,19 @@ class CodexOrchestrator {
       this.registry.setActiveTask(agent.sessionId, agent.agentId, null)
       this.registry.updateAgentState(agent.sessionId, agent.agentId, 'idle', null)
       this.emitAgentStatus(serializeAgent(this.registry.getAgent(agent.sessionId, agent.agentId)))
+      if (task) {
+        await this.advanceWorkflowOnCompletion(agent, task, turnResult)
+      }
       return
     }
 
     if (method === 'turn/failed' || method === 'turn/errored' || method === 'turn/error') {
+      const error = extractError(params)
+
       if (task) {
         const updatedTask = this.registry.updateTask(agent.sessionId, agent.agentId, task.taskId, {
           status: 'failed',
-          error: extractError(params)
+          error
         })
         this.syncRuntimeTaskToSession(agent.sessionId, agent.agentId, updatedTask)
 
@@ -569,7 +881,7 @@ class CodexOrchestrator {
             priority: task.priority
           },
           payload: {
-            error: extractError(params)
+            error
           },
           idempotencyKey: `${threadId}:${turnId}:turn_failed`
         })
@@ -586,6 +898,9 @@ class CodexOrchestrator {
       this.registry.setActiveTask(agent.sessionId, agent.agentId, null)
       this.registry.updateAgentState(agent.sessionId, agent.agentId, 'error', null)
       this.emitAgentStatus(serializeAgent(this.registry.getAgent(agent.sessionId, agent.agentId)))
+      if (task) {
+        await this.failWorkflow(agent, task, error)
+      }
       return
     }
 
@@ -938,10 +1253,63 @@ class CodexOrchestrator {
       result: task.result || null,
       error: task.error || null,
       priority: task.priority || 'normal',
+      parentTaskId: task.parentTaskId || null,
+      subTasks: Array.isArray(task.subTasks) ? [...task.subTasks] : [],
       turnId: task.turnId || null,
       turnHistory: Array.isArray(task.turnHistory) ? [...task.turnHistory] : []
     })
   }
+}
+
+function buildWorkflowSubTaskIds(parentTaskId) {
+  return ['planner', 'executor', 'reviewer'].map((stageId) => `${parentTaskId}:${stageId}`)
+}
+
+function workflowKey(sessionId, parentTaskId) {
+  return `${sessionId}:${parentTaskId}`
+}
+
+function workflowTaskKey(sessionId, taskId) {
+  return `${sessionId}:${taskId}`
+}
+
+function humanizeStage(stageId) {
+  if (stageId === 'planner') {
+    return 'Planning'
+  }
+  if (stageId === 'executor') {
+    return 'Execution'
+  }
+  if (stageId === 'reviewer') {
+    return 'Review'
+  }
+  return stageId
+}
+
+function parentStatusForStage(stageId) {
+  if (stageId === 'planner') {
+    return 'planning'
+  }
+  if (stageId === 'reviewer') {
+    return 'reviewing'
+  }
+  return 'executing'
+}
+
+function getAgentRole(agentId) {
+  if (agentId === 'agent-main') {
+    return 'Main coordinator'
+  }
+  if (agentId === 'planner') {
+    return 'Planning specialist'
+  }
+  if (agentId === 'executor') {
+    return 'Execution specialist'
+  }
+  if (agentId === 'reviewer') {
+    return 'Review specialist'
+  }
+  return 'Codex controlled agent'
 }
 
 function extractThreadId(source) {

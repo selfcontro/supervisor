@@ -132,6 +132,7 @@ class BlackboardStore {
 
   async materializeSessionMarkdown(sessionId) {
     const summary = await this.getSessionSummary(sessionId)
+    const checklistCards = buildWorkflowChecklistCards(summary.tasks)
     const lines = []
 
     lines.push(`# Session Blackboard: ${sessionId}`)
@@ -148,6 +149,22 @@ class BlackboardStore {
     } else {
       for (const task of summary.tasks) {
         lines.push(`- [${task.status}] ${task.taskId} | ${task.title || '(untitled)'} | agent: ${task.agentId || 'n/a'} | updated: ${task.updatedAt}`)
+      }
+    }
+
+    if (checklistCards.length > 0) {
+      lines.push('')
+      lines.push('## Team Checklist Cards')
+      lines.push('')
+
+      for (const card of checklistCards) {
+        lines.push(`### ${card.title}`)
+        lines.push('')
+        lines.push(`- Status: ${card.status}`)
+        lines.push(`- [${card.steps.planning ? 'x' : ' '}] Planning`)
+        lines.push(`- [${card.steps.execution ? 'x' : ' '}] Execution`)
+        lines.push(`- [${card.steps.review ? 'x' : ' '}] Review`)
+        lines.push('')
       }
     }
 
@@ -266,6 +283,71 @@ function normalizeEvent(event) {
     payload: event.payload || {},
     idempotencyKey: event.idempotencyKey || null
   }
+}
+
+function buildWorkflowChecklistCards(tasks) {
+  const cardsByParentId = new Map()
+
+  for (const task of tasks) {
+    const workflowStage = parseWorkflowStageTaskId(task.taskId)
+    if (!workflowStage) {
+      continue
+    }
+
+    const existing = cardsByParentId.get(workflowStage.parentTaskId) || {
+      parentTaskId: workflowStage.parentTaskId,
+      title: task.title.replace(/\s+·\s+(Planning|Execution|Review)$/, ''),
+      status: 'pending',
+      steps: {
+        planning: false,
+        execution: false,
+        review: false
+      }
+    }
+
+    existing.steps[workflowStage.stage] = task.status === 'completed'
+    cardsByParentId.set(workflowStage.parentTaskId, existing)
+  }
+
+  for (const task of tasks) {
+    const existing = cardsByParentId.get(task.taskId)
+    if (!existing) {
+      continue
+    }
+
+    existing.title = task.title || existing.title
+    existing.status = task.status || existing.status
+  }
+
+  return Array.from(cardsByParentId.values()).sort((left, right) => {
+    return left.parentTaskId.localeCompare(right.parentTaskId)
+  })
+}
+
+function parseWorkflowStageTaskId(taskId) {
+  if (typeof taskId !== 'string') {
+    return null
+  }
+
+  const match = taskId.match(/^(.*):(planner|executor|reviewer)$/)
+  if (!match) {
+    return null
+  }
+
+  return {
+    parentTaskId: match[1],
+    stage: normalizeWorkflowStage(match[2])
+  }
+}
+
+function normalizeWorkflowStage(stageId) {
+  if (stageId === 'planner') {
+    return 'planning'
+  }
+  if (stageId === 'executor') {
+    return 'execution'
+  }
+  return 'review'
 }
 
 function previewPayload(payload, maxLength) {
