@@ -71,6 +71,23 @@ class BlackboardStore {
     return this.readEvents(this.sessionEventsPath(sessionId), options)
   }
 
+  async listSessionIds() {
+    const sessionsRoot = path.join(this.rootDir, 'sessions')
+
+    try {
+      const entries = await fs.readdir(sessionsRoot, { withFileTypes: true })
+      return entries
+        .filter(entry => entry.isDirectory())
+        .map(entry => entry.name)
+        .sort()
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        return []
+      }
+      throw error
+    }
+  }
+
   async getAgentEvents(sessionId, agentId, options = {}) {
     return this.readEvents(this.agentEventsPath(sessionId, agentId), options)
   }

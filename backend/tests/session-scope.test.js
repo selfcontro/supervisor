@@ -1,6 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { once } = require('node:events')
+const path = require('node:path')
 const { WebSocket } = require('ws')
 
 const { createServer } = require('../server')
@@ -81,10 +82,9 @@ test('sessions REST and WebSocket traffic are scoped by sessionId', async (t) =>
     const sessionsRes = await fetch(`${baseUrl}/api/sessions`)
     assert.equal(sessionsRes.status, 200)
     const sessionsBody = await sessionsRes.json()
-    assert.deepEqual(
-      sessionsBody.sessions.map(session => session.id).sort(),
-      ['alpha', 'beta']
-    )
+    const listedSessionIds = sessionsBody.sessions.map(session => session.id)
+    assert.ok(listedSessionIds.includes('alpha'))
+    assert.ok(listedSessionIds.includes('beta'))
 
     const alphaSnapshotRes = await fetch(`${baseUrl}/api/sessions/alpha`)
     assert.equal(alphaSnapshotRes.status, 200)
@@ -124,10 +124,9 @@ test('sessions REST and WebSocket traffic are scoped by sessionId', async (t) =>
 
     const sessionsAfterMissingAgent = await fetch(`${baseUrl}/api/sessions`)
     const sessionsAfterMissingAgentBody = await sessionsAfterMissingAgent.json()
-    assert.deepEqual(
-      sessionsAfterMissingAgentBody.sessions.map(session => session.id).sort(),
-      ['alpha', 'beta']
-    )
+    const listedSessionIdsAfterMissingAgent = sessionsAfterMissingAgentBody.sessions.map(session => session.id)
+    assert.ok(listedSessionIdsAfterMissingAgent.includes('alpha'))
+    assert.ok(listedSessionIdsAfterMissingAgent.includes('beta'))
 
     const invalidTaskRes = await fetch(`${baseUrl}/api/tasks`, {
       method: 'POST',
@@ -170,4 +169,67 @@ test('sessions REST and WebSocket traffic are scoped by sessionId', async (t) =>
     await new Promise(resolve => setTimeout(resolve, 200))
     assert.equal(betaUnexpected, false)
   })
+})
+
+test('server hydrates persisted blackboard sessions into REST and WebSocket snapshots', async (t) => {
+  const previousBlackboardRoot = process.env.BLACKBOARD_ROOT_DIR
+  process.env.BLACKBOARD_ROOT_DIR = path.join(process.cwd(), 'data', 'blackboard-live-check')
+
+  const runtime = createServer({ port: 0, host: '127.0.0.1', startProcessing: false })
+  const sockets = []
+
+  t.after(async () => {
+    process.env.BLACKBOARD_ROOT_DIR = previousBlackboardRoot
+    await Promise.all(sockets.map(ws => new Promise(resolve => {
+      if (ws.readyState === ws.CLOSED) {
+        resolve()
+        return
+      }
+
+      ws.once('close', resolve)
+      ws.close()
+    })))
+    await runtime.stop().catch(() => {})
+  })
+
+  await runtime.start()
+
+  const address = runtime.server.address()
+  const baseUrl = `http://127.0.0.1:${address.port}`
+  const wsUrl = `ws://127.0.0.1:${address.port}/ws`
+  const sessionId = 'live-session-verify-task-update'
+
+  const sessionsRes = await fetch(`${baseUrl}/api/sessions`)
+  assert.equal(sessionsRes.status, 200)
+  const sessionsBody = await sessionsRes.json()
+  assert.ok(
+    sessionsBody.sessions.some(session => session.id === sessionId),
+    'expected persisted session to be listed'
+  )
+
+  const snapshotRes = await fetch(`${baseUrl}/api/sessions/${sessionId}`)
+  assert.equal(snapshotRes.status, 200)
+  const snapshot = await snapshotRes.json()
+  assert.equal(snapshot.session.id, sessionId)
+  assert.equal(snapshot.tasks.length, 1)
+  assert.equal(snapshot.tasks[0].description, 'verify-task-update')
+  assert.equal(snapshot.tasks[0].status, 'completed')
+
+  const client = new WebSocket(wsUrl)
+  sockets.push(client)
+  await waitForOpen(client)
+
+  const subscribed = waitForMessage(client, message => message.type === 'subscribed')
+  const initialAgentStatus = waitForMessage(
+    client,
+    message => message.type === 'agent_status' && message.sessionId === sessionId
+  )
+
+  client.send(JSON.stringify({ type: 'subscribe', payload: { sessionId } }))
+
+  await subscribed
+  const agentStatus = await initialAgentStatus
+  assert.equal(agentStatus.payload.agentId, 'agent-main')
+  assert.equal(agentStatus.payload.data.status, 'completed')
+  assert.equal(agentStatus.payload.data.currentTask, 'verify-task-update')
 })

@@ -8,6 +8,7 @@ class SessionStore {
     this.sessions = new Map()
     this.listeners = new Set()
     this.taskCounter = 0
+    this.runtimeAgentProvider = null
     this.ensureSession(DEFAULT_SESSION_ID)
   }
 
@@ -31,6 +32,7 @@ class SessionStore {
         createdAt,
         updatedAt: createdAt,
         tasks: new Map(),
+        persistedAgents: new Map(),
         logs: [],
         agentManager: new AgentManager((event) => {
           this.handleAgentManagerEvent(normalizedSessionId, event)
@@ -53,6 +55,10 @@ class SessionStore {
   subscribe(listener) {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
+  }
+
+  setRuntimeAgentProvider(provider) {
+    this.runtimeAgentProvider = typeof provider === 'function' ? provider : null
   }
 
   emitSessionEvent(sessionId, event) {
@@ -151,6 +157,55 @@ class SessionStore {
     return task
   }
 
+  syncTask(task) {
+    const session = this.ensureSession(task.sessionId)
+    const existing = session.tasks.get(task.id) || null
+    const createdAt = existing?.createdAt || task.createdAt || new Date().toISOString()
+    const nextTask = {
+      logs: [],
+      subTasks: [],
+      result: null,
+      agentId: null,
+      error: null,
+      reviewLoops: 0,
+      priority: 'normal',
+      ...existing,
+      ...task,
+      createdAt,
+      updatedAt: task.updatedAt || new Date().toISOString()
+    }
+
+    session.tasks.set(nextTask.id, nextTask)
+    session.updatedAt = nextTask.updatedAt
+
+    if (!existing) {
+      this.emitSessionEvent(session.id, {
+        type: 'task:new',
+        task: nextTask
+      })
+    }
+
+    return nextTask
+  }
+
+  syncAgent(sessionId, agent) {
+    const session = this.ensureSession(sessionId)
+    const existing = session.persistedAgents.get(agent.id) || null
+    const nextAgent = {
+      id: agent.id,
+      name: agent.name || existing?.name || agent.id,
+      role: agent.role || existing?.role || 'Codex controlled agent',
+      status: agent.status || existing?.status || 'idle',
+      currentTask: Object.prototype.hasOwnProperty.call(agent, 'currentTask')
+        ? (agent.currentTask || null)
+        : (existing?.currentTask || null)
+    }
+
+    session.persistedAgents.set(nextAgent.id, nextAgent)
+    session.updatedAt = new Date().toISOString()
+    return nextAgent
+  }
+
   getTask(sessionId, taskId) {
     const session = this.getSession(sessionId)
     if (!session) {
@@ -216,7 +271,35 @@ class SessionStore {
 
   getAgents(sessionId) {
     const session = this.getSession(sessionId)
-    return session ? session.agentManager.getAllAgents() : []
+    if (!session) {
+      return []
+    }
+
+    const agentsById = new Map()
+
+    session.persistedAgents.forEach((agent, agentId) => {
+      agentsById.set(agentId, agent)
+    })
+
+    for (const agent of session.agentManager.getAllAgents()) {
+      agentsById.set(agent.id, agent)
+    }
+
+    if (this.runtimeAgentProvider) {
+      const runtimeAgents = this.runtimeAgentProvider(session.id) || []
+      for (const runtimeAgent of runtimeAgents) {
+        const normalized = normalizeRuntimeAgent(runtimeAgent)
+        if (!normalized) {
+          continue
+        }
+        agentsById.set(normalized.id, {
+          ...(agentsById.get(normalized.id) || {}),
+          ...normalized
+        })
+      }
+    }
+
+    return Array.from(agentsById.values())
   }
 
   getLogs(sessionId) {
@@ -267,7 +350,7 @@ class SessionStore {
         createdAt: session.createdAt,
         updatedAt: session.updatedAt
       },
-      agents: session.agentManager.getAllAgents(),
+      agents: this.getAgents(session.id),
       tasks: this.getTasks(session.id),
       logs: this.getLogs(session.id)
     }
@@ -281,4 +364,42 @@ class SessionStore {
 module.exports = {
   SessionStore,
   DEFAULT_SESSION_ID
+}
+
+function normalizeRuntimeAgent(agent) {
+  if (!agent || typeof agent !== 'object') {
+    return null
+  }
+
+  const id = typeof agent.agentId === 'string' && agent.agentId.trim()
+    ? agent.agentId.trim()
+    : typeof agent.id === 'string' && agent.id.trim()
+      ? agent.id.trim()
+      : ''
+
+  if (!id) {
+    return null
+  }
+
+  const state = typeof agent.state === 'string' ? agent.state : typeof agent.status === 'string' ? agent.status : 'idle'
+  return {
+    id,
+    name: typeof agent.name === 'string' && agent.name.trim() ? agent.name.trim() : id,
+    role: typeof agent.role === 'string' && agent.role.trim() ? agent.role.trim() : 'Codex controlled agent',
+    status: mapRuntimeAgentStatus(state),
+    currentTask: Object.prototype.hasOwnProperty.call(agent, 'currentTask') ? (agent.currentTask || null) : null,
+  }
+}
+
+function mapRuntimeAgentStatus(state) {
+  if (state === 'working') {
+    return 'working'
+  }
+  if (state === 'error') {
+    return 'error'
+  }
+  if (state === 'completed' || state === 'done') {
+    return 'completed'
+  }
+  return 'idle'
 }

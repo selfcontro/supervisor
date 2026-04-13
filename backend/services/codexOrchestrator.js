@@ -11,6 +11,10 @@ class CodexOrchestrator {
     this.autoApprovalMode = process.env.CODEX_AUTO_APPROVAL_MODE || 'manual'
     this.commandRuns = new Map()
     this.started = false
+
+    if (this.sessionStore && typeof this.sessionStore.setRuntimeAgentProvider === 'function') {
+      this.sessionStore.setRuntimeAgentProvider((sessionId) => this.listAgents(sessionId))
+    }
   }
 
   async start() {
@@ -88,7 +92,15 @@ class CodexOrchestrator {
   }
 
   listAgents(sessionId) {
-    return this.registry.listAgents(sessionId)
+    return this.registry.listAgents(sessionId).map((agent) => {
+      const activeTask = this.registry.getActiveTask(agent.sessionId, agent.agentId)
+      return {
+        ...agent,
+        name: agent.agentId,
+        role: 'Codex controlled agent',
+        currentTask: activeTask ? activeTask.title : null
+      }
+    })
   }
 
   async dispatchTask(sessionId, agentId, payload = {}) {
@@ -122,6 +134,7 @@ class CodexOrchestrator {
     }
 
     this.registry.addTask(agent.sessionId, agent.agentId, task)
+    this.syncRuntimeTaskToSession(agent.sessionId, agent.agentId, task)
     this.registry.setActiveTask(agent.sessionId, agent.agentId, taskId)
 
     await this.blackboard.appendEvent({
@@ -156,6 +169,7 @@ class CodexOrchestrator {
       turnId,
       turnHistory: [...task.turnHistory, turnId].filter(Boolean)
     })
+    this.syncRuntimeTaskToSession(agent.sessionId, agent.agentId, this.registry.getTask(agent.sessionId, agent.agentId, taskId))
 
     this.broadcast({
       type: 'task_update',
@@ -204,6 +218,7 @@ class CodexOrchestrator {
         status: 'interrupted'
       })
       if (updatedTask) {
+        this.syncRuntimeTaskToSession(sessionId, agentId, updatedTask)
         this.emitTaskUpdate(sessionId, updatedTask.taskId, {
           status: updatedTask.status,
           updatedAt: updatedTask.updatedAt,
@@ -264,6 +279,7 @@ class CodexOrchestrator {
       turnId,
       turnHistory: [...turnHistory, turnId].filter(Boolean)
     })
+    this.syncRuntimeTaskToSession(sessionId, agentId, this.registry.getTask(sessionId, agentId, activeTask.taskId))
     this.registry.updateAgentState(sessionId, agentId, 'working', turnId)
     this.emitTaskUpdate(sessionId, activeTask.taskId, {
       status: 'executing',
@@ -322,6 +338,7 @@ class CodexOrchestrator {
       attempt: nextAttempt,
       turnHistory: [...history, turnId].filter(Boolean)
     })
+    this.syncRuntimeTaskToSession(sessionId, agentId, this.registry.getTask(sessionId, agentId, taskId))
     this.registry.setActiveTask(sessionId, agentId, taskId)
     this.registry.updateAgentState(sessionId, agentId, 'working', turnId)
     this.emitTaskUpdate(sessionId, taskId, {
@@ -465,6 +482,7 @@ class CodexOrchestrator {
           status: 'executing',
           turnId
         })
+        this.syncRuntimeTaskToSession(agent.sessionId, agent.agentId, this.registry.getTask(agent.sessionId, agent.agentId, task.taskId))
 
         await this.blackboard.appendEvent({
           sessionId: agent.sessionId,
@@ -495,6 +513,7 @@ class CodexOrchestrator {
           status: 'completed',
           result: extractTurnResult(params)
         })
+        this.syncRuntimeTaskToSession(agent.sessionId, agent.agentId, updatedTask)
 
         await this.blackboard.appendEvent({
           sessionId: agent.sessionId,
@@ -535,6 +554,7 @@ class CodexOrchestrator {
           status: 'failed',
           error: extractError(params)
         })
+        this.syncRuntimeTaskToSession(agent.sessionId, agent.agentId, updatedTask)
 
         await this.blackboard.appendEvent({
           sessionId: agent.sessionId,
@@ -899,6 +919,27 @@ class CodexOrchestrator {
         taskId,
         data
       }
+    })
+  }
+
+  syncRuntimeTaskToSession(sessionId, agentId, task) {
+    if (!task) {
+      return null
+    }
+
+    return this.sessionStore.syncTask({
+      id: task.taskId,
+      sessionId,
+      description: task.title || task.prompt || task.taskId,
+      status: task.status || 'assigned',
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+      agentId,
+      result: task.result || null,
+      error: task.error || null,
+      priority: task.priority || 'normal',
+      turnId: task.turnId || null,
+      turnHistory: Array.isArray(task.turnHistory) ? [...task.turnHistory] : []
     })
   }
 }

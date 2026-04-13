@@ -237,6 +237,12 @@ function createServer(options = {}) {
       console.error('Codex orchestrator failed to start:', error.message)
     }
 
+    try {
+      await hydrateSessionStoreFromBlackboard({ sessionStore, blackboardStore })
+    } catch (error) {
+      console.error('Session hydration from blackboard failed:', error.message)
+    }
+
     await new Promise((resolve, reject) => {
       server.once('error', reject)
       server.listen(port, host, () => {
@@ -288,4 +294,87 @@ if (require.main === module) {
     console.error('Failed to start server:', error)
     process.exit(1)
   })
+}
+
+async function hydrateSessionStoreFromBlackboard({ sessionStore, blackboardStore }) {
+  const sessionIds = await blackboardStore.listSessionIds()
+
+  for (const sessionId of sessionIds) {
+    const events = await blackboardStore.getSessionEvents(sessionId)
+    if (events.length === 0) {
+      continue
+    }
+
+    const sortedEvents = [...events].sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime())
+
+    for (const event of sortedEvents) {
+      sessionStore.ensureSession(sessionId)
+
+      if (event.task?.taskId) {
+        sessionStore.syncTask({
+          id: event.task.taskId,
+          sessionId,
+          description: event.task.title || event.task.taskId,
+          status: mapBlackboardTaskStatus(event.task.status),
+          createdAt: event.ts,
+          updatedAt: event.ts,
+          agentId: event.agentId || null,
+          result: event.type === 'task_done' ? event.payload?.result || null : null,
+          error: event.type === 'task_failed' ? event.payload?.error || null : null,
+          priority: event.task.priority || 'normal'
+        })
+      }
+
+      if (event.agentId) {
+        sessionStore.syncAgent(sessionId, {
+          id: event.agentId,
+          name: event.agentId,
+          role: 'Codex controlled agent',
+          status: mapBlackboardAgentStatus(event),
+          currentTask: event.task?.title || null
+        })
+      }
+    }
+  }
+}
+
+function mapBlackboardTaskStatus(status) {
+  if (typeof status !== 'string') {
+    return 'pending'
+  }
+
+  if (status === 'assigned') {
+    return 'pending'
+  }
+
+  return status
+}
+
+function mapBlackboardAgentStatus(event) {
+  if (event.type === 'task_done') {
+    return 'completed'
+  }
+
+  if (event.type === 'task_failed') {
+    return 'error'
+  }
+
+  if (event.type === 'task_progress' || event.type === 'task_assigned') {
+    return 'working'
+  }
+
+  if (event.type === 'agent_state') {
+    const state = event.payload?.state
+    if (state === 'ready') {
+      return 'idle'
+    }
+    if (state === 'error') {
+      return 'error'
+    }
+    if (state === 'completed' || state === 'done') {
+      return 'completed'
+    }
+  }
+
+  return 'idle'
 }

@@ -17,7 +17,6 @@ import {
   fetchAgentBlackboardMarkdown,
   fetchSessionBlackboardMarkdown,
   interruptCodexAgent,
-  listCodexAgents,
   respondCodexApproval,
   resumeCodexAgent,
   retryCodexTask,
@@ -128,6 +127,11 @@ function buildTaskHistory(agent: WorkspaceAgent | null, tasks: SessionTask[]) {
       completedAt: task.updatedAt,
       result: task.result || undefined,
     }))
+}
+
+function pickPreferredCodexAgentId(agents: WorkspaceAgent[]) {
+  const runtimeAgent = agents.find((agent) => !['planner', 'executor', 'reviewer'].includes(agent.id))
+  return runtimeAgent?.id || null
 }
 
 function getErrorMessage(error: unknown) {
@@ -534,10 +538,9 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
       setSelectedAgentId(null)
       reconnectAttemptsRef.current = 0
 
-      const [sessionListResult, snapshotResult, codexAgentsResult] = await Promise.allSettled([
+      const [sessionListResult, snapshotResult] = await Promise.allSettled([
         fetchSessionList(),
         fetchSessionSnapshot(sessionId),
-        listCodexAgents(sessionId),
       ])
 
       if (disposed) {
@@ -570,27 +573,9 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
 
       const snapshot = snapshotResult.value
       hydrateSnapshot(snapshot)
-      if (codexAgentsResult.status === 'fulfilled' && codexAgentsResult.value.length > 0) {
-        setCodexAgentId((current) => (current === 'agent-main' ? codexAgentsResult.value[0].agentId : current))
-        setAgents((current) => {
-          const existingIds = new Set(current.map((agent) => agent.id))
-          const merged = [...current]
-
-          for (const codexAgent of codexAgentsResult.value) {
-            if (existingIds.has(codexAgent.agentId)) {
-              continue
-            }
-            merged.push({
-              id: codexAgent.agentId,
-              name: codexAgent.agentId,
-              status: codexAgent.state === 'working' ? 'working' : codexAgent.state === 'error' ? 'error' : 'idle',
-              currentTask: null,
-              role: 'Codex controlled agent',
-            })
-          }
-
-          return merged
-        })
+      const preferredCodexAgentId = pickPreferredCodexAgentId(snapshot.agents as WorkspaceAgent[])
+      if (preferredCodexAgentId) {
+        setCodexAgentId((current) => (current === 'agent-main' ? preferredCodexAgentId : current))
       }
 
       if (sessionListResult.status === 'fulfilled') {
@@ -1022,7 +1007,11 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
                       <span className="soft-pill">Live pipeline</span>
                     </div>
                     <div className="h-[400px] sm:h-[500px] xl:h-[560px]">
-                      <FlowChart agents={agents.map((agent) => ({ ...agent, currentTask: agent.currentTask || undefined }))} />
+                      <FlowChart
+                        agents={agents.map((agent) => ({ ...agent, currentTask: agent.currentTask || undefined }))}
+                        selectedAgentId={selectedAgentId}
+                        onSelectAgent={setSelectedAgentId}
+                      />
                     </div>
                   </section>
 
