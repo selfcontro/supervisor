@@ -8,3 +8,5 @@ backend/node_modules/
 backend/.env
 frontend/.env.local
 backend/backend/data/blackboard/sessions/
+.claude/settings.local.json
+CLAUDE.md
