@@ -1,0 +1,1 @@
+{"eventId":"8464dcbb-93d2-49cb-8e92-5acff383b156","ts":"2026-04-14T11:48:01.092Z","sessionId":"default","agentId":"subagent","threadId":"019d8bd1-e1b0-7f82-8b3f-638c1d2cae77","turnId":null,"type":"agent_state","task":null,"payload":{"state":"ready","event":"thread_started"},"idempotencyKey":null}

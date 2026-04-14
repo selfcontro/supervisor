@@ -1,0 +1,1 @@
+{"eventId":"5b4bc5c4-e4fa-42e6-b977-bce8027d9e31","ts":"2026-04-14T12:17:09.913Z","sessionId":"default","agentId":"codex_task_1776169029887_yjc4hm::subagent","threadId":"019d8bec-910e-7c82-ad36-688ce3769a9e","turnId":null,"type":"agent_state","task":null,"payload":{"state":"ready","event":"thread_started"},"idempotencyKey":null}

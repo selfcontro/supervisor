@@ -27,7 +27,12 @@ class AgentRegistry {
         activeTurnId: null,
         harness: sanitizeHarness(options.harness || {}),
         tasks: new Map(),
-        pendingApprovals: new Map()
+        pendingApprovals: new Map(),
+        name: typeof options.name === 'string' && options.name.trim() ? options.name.trim() : normalizedAgentId,
+        role: typeof options.role === 'string' && options.role.trim() ? options.role.trim() : 'Codex controlled agent',
+        ephemeral: Boolean(options.ephemeral),
+        workflowParentTaskId: typeof options.workflowParentTaskId === 'string' ? options.workflowParentTaskId : null,
+        stageId: typeof options.stageId === 'string' ? options.stageId : null
       }
       sessionAgents.set(normalizedAgentId, agent)
     }
@@ -37,6 +42,22 @@ class AgentRegistry {
         ...agent.harness,
         ...sanitizeHarness(options.harness)
       }
+    }
+
+    if (typeof options.name === 'string' && options.name.trim()) {
+      agent.name = options.name.trim()
+    }
+    if (typeof options.role === 'string' && options.role.trim()) {
+      agent.role = options.role.trim()
+    }
+    if (Object.prototype.hasOwnProperty.call(options, 'ephemeral')) {
+      agent.ephemeral = Boolean(options.ephemeral)
+    }
+    if (Object.prototype.hasOwnProperty.call(options, 'workflowParentTaskId')) {
+      agent.workflowParentTaskId = typeof options.workflowParentTaskId === 'string' ? options.workflowParentTaskId : null
+    }
+    if (Object.prototype.hasOwnProperty.call(options, 'stageId')) {
+      agent.stageId = typeof options.stageId === 'string' ? options.stageId : null
     }
 
     agent.updatedAt = new Date().toISOString()
@@ -51,7 +72,9 @@ class AgentRegistry {
       return []
     }
 
-    return Array.from(sessionAgents.values()).map(agent => serializeAgent(agent))
+    return Array.from(sessionAgents.values())
+      .filter(agent => agent.state !== 'closed')
+      .map(agent => serializeAgent(agent))
   }
 
   getAgent(sessionId, agentId) {
@@ -265,6 +288,11 @@ function serializeAgent(agent) {
   return {
     sessionId: agent.sessionId,
     agentId: agent.agentId,
+    name: agent.name,
+    role: agent.role,
+    ephemeral: Boolean(agent.ephemeral),
+    workflowParentTaskId: agent.workflowParentTaskId || null,
+    stageId: agent.stageId || null,
     state: agent.state,
     createdAt: agent.createdAt,
     updatedAt: agent.updatedAt,

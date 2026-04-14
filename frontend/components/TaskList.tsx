@@ -48,9 +48,26 @@ export default function TaskList({ tasks, onTaskClick, selectedTaskId }: TaskLis
   }, [tasks])
 
   const filteredTasks = useMemo(() => {
-    const result = filter === 'all' ? [...tasks] : tasks.filter((task) => task.status === filter)
-    result.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
-    return result
+    const scopedTasks = filter === 'all' ? [...tasks] : tasks.filter((task) => task.status === filter)
+    const byId = new Map(scopedTasks.map((task) => [task.id, task] as const))
+    const parents = scopedTasks
+      .filter((task) => !task.parentTaskId || !byId.has(task.parentTaskId))
+      .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+
+    const ordered: Array<TaskItem & { depth: number }> = []
+
+    const pushTask = (task: TaskItem, depth: number) => {
+      ordered.push({ ...task, depth })
+
+      const children = scopedTasks
+        .filter((candidate) => candidate.parentTaskId === task.id)
+        .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime())
+
+      children.forEach((child) => pushTask(child, depth + 1))
+    }
+
+    parents.forEach((task) => pushTask(task, 0))
+    return ordered
   }, [tasks, filter])
 
   return (
@@ -78,6 +95,8 @@ export default function TaskList({ tasks, onTaskClick, selectedTaskId }: TaskLis
               const config = statusConfig[task.status] || { label: task.status, color: '#cbd5e1', bgColor: 'rgba(148,163,184,0.18)' }
               const isSelected = selectedTaskId === task.id
               const isNew = recentlyAdded.has(task.id)
+              const depth = 'depth' in task ? task.depth : 0
+              const isChild = depth > 0
 
               return (
                 <button
@@ -87,11 +106,20 @@ export default function TaskList({ tasks, onTaskClick, selectedTaskId }: TaskLis
                   className={`frame-surface frame-muted cursor-pointer rounded-2xl border p-4 transition-all duration-200 ${
                     isSelected
                       ? 'border-[rgba(14,165,233,0.42)] bg-[rgba(14,165,233,0.14)]'
-                      : 'border-[var(--line)] bg-[rgba(15,23,42,0.55)] hover:border-[var(--line-strong)] hover:bg-[rgba(15,23,42,0.78)]'
+                      : isChild
+                        ? 'border-[rgba(125,211,252,0.12)] bg-[rgba(10,15,26,0.64)] hover:border-[rgba(125,211,252,0.28)] hover:bg-[rgba(15,23,42,0.78)]'
+                        : 'border-[var(--line)] bg-[rgba(15,23,42,0.55)] hover:border-[var(--line-strong)] hover:bg-[rgba(15,23,42,0.78)]'
                   } ${isNew ? 'animate-[taskPop_0.3s_ease-out]' : ''} w-full text-left focus:outline-none focus:ring-2 focus:ring-[rgba(14,165,233,0.38)]`}
                   aria-pressed={isSelected}
+                  style={{
+                    marginLeft: depth > 0 ? `${Math.min(depth, 3) * 18}px` : undefined,
+                    width: depth > 0 ? `calc(100% - ${Math.min(depth, 3) * 18}px)` : '100%',
+                  }}
                 >
                   <div className="flex items-start gap-3">
+                    {isChild ? (
+                      <span className="mt-1 inline-flex h-2 w-2 shrink-0 rounded-full bg-[rgba(125,211,252,0.85)]" />
+                    ) : null}
                     <span
                       className="inline-flex shrink-0 items-center justify-center rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.04em] leading-[1.2]"
                       style={{ backgroundColor: config.bgColor, color: config.color }}
@@ -100,9 +128,10 @@ export default function TaskList({ tasks, onTaskClick, selectedTaskId }: TaskLis
                     </span>
                     <p className="line-clamp-2 flex-1 text-sm leading-relaxed text-[var(--ink)]">{task.description}</p>
                   </div>
-                  <div className="ml-[4.4rem] mt-2 flex items-center gap-2">
+                  <div className={`mt-2 flex items-center gap-2 ${isChild ? 'ml-[5rem]' : 'ml-[4.4rem]'}`}>
                     <span className="text-xs text-[var(--ink-muted)]">{new Date(task.createdAt).toLocaleTimeString()}</span>
                     {task.agentId ? <span className="text-xs text-[var(--ink-soft)]">· {task.agentId}</span> : null}
+                    {isChild ? <span className="text-xs text-[rgba(125,211,252,0.82)]">subagent</span> : null}
                   </div>
                 </button>
               )

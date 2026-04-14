@@ -163,6 +163,7 @@ class BlackboardStore {
         lines.push(`- Status: ${card.status}`)
         lines.push(`- [${card.steps.planning ? 'x' : ' '}] Planning`)
         lines.push(`- [${card.steps.execution ? 'x' : ' '}] Execution`)
+        lines.push(`- [${card.steps.subagent ? 'x' : ' '}] Subagent`)
         lines.push(`- [${card.steps.review ? 'x' : ' '}] Review`)
         lines.push('')
       }
@@ -296,11 +297,12 @@ function buildWorkflowChecklistCards(tasks) {
 
     const existing = cardsByParentId.get(workflowStage.parentTaskId) || {
       parentTaskId: workflowStage.parentTaskId,
-      title: task.title.replace(/\s+·\s+(Planning|Execution|Review)$/, ''),
+      title: task.title.replace(/\s+·\s+(Planning|Execution|Subagent|Review)$/, ''),
       status: 'pending',
       steps: {
         planning: false,
         execution: false,
+        subagent: false,
         review: false
       }
     }
@@ -329,7 +331,7 @@ function parseWorkflowStageTaskId(taskId) {
     return null
   }
 
-  const match = taskId.match(/^(.*):(planner|executor|reviewer)$/)
+  const match = taskId.match(/^(.*):(planner|executor|subagent|reviewer)$/)
   if (!match) {
     return null
   }
@@ -346,6 +348,9 @@ function normalizeWorkflowStage(stageId) {
   }
   if (stageId === 'executor') {
     return 'execution'
+  }
+  if (stageId === 'subagent') {
+    return 'subagent'
   }
   return 'review'
 }

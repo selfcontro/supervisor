@@ -24,6 +24,8 @@ export interface SessionTask {
   createdAt: string
   updatedAt?: string
   agentId?: string | null
+  parentTaskId?: string | null
+  subTasks?: string[]
   result?: string | null
   error?: string | null
 }
@@ -59,6 +61,11 @@ export interface SessionDetails {
 export type SessionAgent = Omit<Agent, 'currentTask'> & {
   currentTask?: string | null
   role?: string
+  ephemeral?: boolean
+  workflowParentTaskId?: string | null
+  stageId?: string | null
+  threadId?: string | null
+  activeTurnId?: string | null
   taskHistory?: Array<{
     task: string
     assignedAt: string
@@ -70,6 +77,7 @@ export type SessionAgent = Omit<Agent, 'currentTask'> & {
 export interface SessionSnapshot {
   session: SessionDetails
   agents: SessionAgent[]
+  workflowAgents: SessionAgent[]
   tasks: SessionTask[]
   logs: SessionLogEntry[]
 }

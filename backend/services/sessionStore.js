@@ -189,6 +189,10 @@ class SessionStore {
   }
 
   syncAgent(sessionId, agent) {
+    if (!agent || shouldIgnorePersistentAgent(agent.id, agent)) {
+      return null
+    }
+
     const session = this.ensureSession(sessionId)
     const existing = session.persistedAgents.get(agent.id) || null
     const nextAgent = {
@@ -278,18 +282,20 @@ class SessionStore {
     const agentsById = new Map()
 
     session.persistedAgents.forEach((agent, agentId) => {
+      if (isLegacyWorkflowAgent(agentId)) {
+        return
+      }
       agentsById.set(agentId, agent)
     })
-
-    for (const agent of session.agentManager.getAllAgents()) {
-      agentsById.set(agent.id, agent)
-    }
 
     if (this.runtimeAgentProvider) {
       const runtimeAgents = this.runtimeAgentProvider(session.id) || []
       for (const runtimeAgent of runtimeAgents) {
         const normalized = normalizeRuntimeAgent(runtimeAgent)
-        if (!normalized) {
+        if (!normalized || normalized.ephemeral) {
+          continue
+        }
+        if (isLegacyWorkflowAgent(normalized.id)) {
           continue
         }
         agentsById.set(normalized.id, {
@@ -300,6 +306,17 @@ class SessionStore {
     }
 
     return Array.from(agentsById.values())
+  }
+
+  getWorkflowAgents(sessionId) {
+    const session = this.getSession(sessionId)
+    if (!session || !this.runtimeAgentProvider) {
+      return []
+    }
+
+    return (this.runtimeAgentProvider(session.id) || [])
+      .map(runtimeAgent => normalizeRuntimeAgent(runtimeAgent))
+      .filter(agent => agent && agent.ephemeral)
   }
 
   getLogs(sessionId) {
@@ -325,15 +342,15 @@ class SessionStore {
         const tasks = this.getTasks(session.id)
         const activeTaskCount = tasks.filter(task => !['completed', 'rejected'].includes(task.status)).length
 
-        return {
-          id: session.id,
-          createdAt: session.createdAt,
-          updatedAt: session.updatedAt,
-          taskCount: tasks.length,
-          activeTaskCount,
-          agentCount: session.agentManager.getAllAgents().length,
-          latestLogAt: session.logs.length ? session.logs[session.logs.length - 1].timestamp : null
-        }
+      return {
+        id: session.id,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+        taskCount: tasks.length,
+        activeTaskCount,
+        agentCount: this.getAgents(session.id).length + this.getWorkflowAgents(session.id).length,
+        latestLogAt: session.logs.length ? session.logs[session.logs.length - 1].timestamp : null
+      }
       })
       .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
   }
@@ -351,6 +368,7 @@ class SessionStore {
         updatedAt: session.updatedAt
       },
       agents: this.getAgents(session.id),
+      workflowAgents: this.getWorkflowAgents(session.id),
       tasks: this.getTasks(session.id),
       logs: this.getLogs(session.id)
     }
@@ -388,6 +406,11 @@ function normalizeRuntimeAgent(agent) {
     role: typeof agent.role === 'string' && agent.role.trim() ? agent.role.trim() : 'Codex controlled agent',
     status: mapRuntimeAgentStatus(state),
     currentTask: Object.prototype.hasOwnProperty.call(agent, 'currentTask') ? (agent.currentTask || null) : null,
+    ephemeral: Boolean(agent.ephemeral),
+    workflowParentTaskId: typeof agent.workflowParentTaskId === 'string' ? agent.workflowParentTaskId : null,
+    stageId: typeof agent.stageId === 'string' ? agent.stageId : null,
+    threadId: typeof agent.threadId === 'string' ? agent.threadId : null,
+    activeTurnId: typeof agent.activeTurnId === 'string' ? agent.activeTurnId : null,
   }
 }
 
@@ -402,4 +425,28 @@ function mapRuntimeAgentStatus(state) {
     return 'completed'
   }
   return 'idle'
+}
+
+function isLegacyWorkflowAgent(agentId) {
+  return ['planner', 'executor', 'subagent', 'reviewer'].includes(agentId)
+}
+
+function shouldIgnorePersistentAgent(agentId, agent) {
+  if (typeof agentId !== 'string' || !agentId.trim()) {
+    return true
+  }
+
+  if (isLegacyWorkflowAgent(agentId)) {
+    return true
+  }
+
+  if (agentId.includes('::')) {
+    return true
+  }
+
+  if (agent && (agent.ephemeral || typeof agent.workflowParentTaskId === 'string')) {
+    return true
+  }
+
+  return false
 }

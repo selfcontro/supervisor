@@ -99,7 +99,25 @@ test('codex tasks are included in session snapshots and update through completio
   await orchestrator.stop()
 })
 
-test('agent-main orchestrates planner, executor, and reviewer subagents through staged task flow', async () => {
+test('clean sessions do not expose legacy workflow agents before Codex agents exist', async () => {
+  const sessionStore = new SessionStore()
+  sessionStore.ensureSession('clean-session')
+
+  assert.deepEqual(sessionStore.getAgents('clean-session'), [])
+
+  sessionStore.syncAgent('clean-session', {
+    id: 'agent-main',
+    name: 'agent-main',
+    role: 'Codex controlled agent',
+    status: 'idle',
+    currentTask: null
+  })
+
+  const agentsAfterSync = sessionStore.getAgents('clean-session')
+  assert.deepEqual(agentsAfterSync.map((agent) => agent.id), ['agent-main'])
+})
+
+test('agent-main lazily creates and removes task-scoped workflow agents through staged task flow', async () => {
   const sessionStore = new SessionStore()
   const registry = new AgentRegistry()
   const client = new FakeCodexClient()
@@ -117,38 +135,39 @@ test('agent-main orchestrates planner, executor, and reviewer subagents through 
 
   const dispatchResult = await orchestrator.dispatchTask('default', 'agent-main', {
     title: 'Build onboarding checklist',
-    prompt: 'Use the team to plan, implement, and review an onboarding checklist feature.'
+    prompt: 'Use the team to plan, implement, support, and review an onboarding checklist feature across frontend and backend surfaces.'
   })
 
   const snapshotAfterDispatch = sessionStore.getSessionSnapshot('default')
   const parentTask = snapshotAfterDispatch.tasks.find((task) => task.id === dispatchResult.taskId)
   const plannerTask = snapshotAfterDispatch.tasks.find((task) => task.id === `${dispatchResult.taskId}:planner`)
-  const plannerAgent = snapshotAfterDispatch.agents.find((agent) => agent.id === 'planner')
-  const executorAgent = snapshotAfterDispatch.agents.find((agent) => agent.id === 'executor')
-  const reviewerAgent = snapshotAfterDispatch.agents.find((agent) => agent.id === 'reviewer')
   const mainAgent = snapshotAfterDispatch.agents.find((agent) => agent.id === 'agent-main')
+  const plannerAgent = snapshotAfterDispatch.workflowAgents.find((agent) => agent.stageId === 'planner')
+  const executorAgent = snapshotAfterDispatch.workflowAgents.find((agent) => agent.stageId === 'executor')
+  const subagentAgent = snapshotAfterDispatch.workflowAgents.find((agent) => agent.stageId === 'subagent')
+  const reviewerAgent = snapshotAfterDispatch.workflowAgents.find((agent) => agent.stageId === 'reviewer')
 
   assert.ok(parentTask, 'expected parent task to appear in snapshot')
   assert.equal(parentTask.status, 'planning')
-  assert.deepEqual(parentTask.subTasks, [
-    `${dispatchResult.taskId}:planner`,
-    `${dispatchResult.taskId}:executor`,
-    `${dispatchResult.taskId}:reviewer`,
-  ])
+  assert.deepEqual(parentTask.subTasks, [`${dispatchResult.taskId}:planner`])
   assert.ok(plannerTask, 'expected planner task to be created')
   assert.equal(plannerTask.status, 'executing')
-  assert.equal(plannerTask.agentId, 'planner')
+  assert.equal(plannerTask.stageId, 'planner')
+  assert.deepEqual(snapshotAfterDispatch.agents.map((agent) => agent.id).sort(), ['agent-main'])
   assert.equal(mainAgent?.status, 'working')
   assert.equal(mainAgent?.currentTask, 'Build onboarding checklist')
+  assert.equal(plannerAgent?.name, 'Task Breakdown')
+  assert.match(plannerAgent?.role || '', /execution plan/i)
   assert.equal(plannerAgent?.status, 'working')
-  assert.equal(executorAgent?.status, 'idle')
-  assert.equal(reviewerAgent?.status, 'idle')
+  assert.equal(executorAgent, undefined)
+  assert.equal(subagentAgent, undefined)
+  assert.equal(reviewerAgent, undefined)
 
   await orchestrator.handleNotification({
     method: 'turn/completed',
     params: {
-      threadId: registry.getAgent('default', 'planner').threadId,
-      turnId: registry.getAgent('default', 'planner').activeTurnId,
+      threadId: plannerAgent.threadId,
+      turnId: plannerAgent.activeTurnId,
       turn: {
         outputText: 'Plan ready'
       }
@@ -158,16 +177,22 @@ test('agent-main orchestrates planner, executor, and reviewer subagents through 
   const snapshotAfterPlanning = sessionStore.getSessionSnapshot('default')
   const executorTask = snapshotAfterPlanning.tasks.find((task) => task.id === `${dispatchResult.taskId}:executor`)
   assert.equal(snapshotAfterPlanning.tasks.find((task) => task.id === dispatchResult.taskId)?.status, 'executing')
-  assert.equal(snapshotAfterPlanning.agents.find((agent) => agent.id === 'planner')?.status, 'idle')
-  assert.equal(snapshotAfterPlanning.agents.find((agent) => agent.id === 'executor')?.status, 'working')
+  assert.equal(snapshotAfterPlanning.workflowAgents.find((agent) => agent.stageId === 'planner'), undefined)
+  assert.equal(snapshotAfterPlanning.workflowAgents.find((agent) => agent.stageId === 'executor')?.status, 'working')
+  assert.equal(snapshotAfterPlanning.workflowAgents.find((agent) => agent.stageId === 'reviewer'), undefined)
   assert.ok(executorTask, 'expected executor task to be created after planning')
   assert.equal(executorTask.status, 'executing')
+  assert.deepEqual(snapshotAfterPlanning.tasks.find((task) => task.id === dispatchResult.taskId)?.subTasks, [
+    `${dispatchResult.taskId}:planner`,
+    `${dispatchResult.taskId}:executor`,
+  ])
 
+  const executorRuntime = snapshotAfterPlanning.workflowAgents.find((agent) => agent.stageId === 'executor')
   await orchestrator.handleNotification({
     method: 'turn/completed',
     params: {
-      threadId: registry.getAgent('default', 'executor').threadId,
-      turnId: registry.getAgent('default', 'executor').activeTurnId,
+      threadId: executorRuntime.threadId,
+      turnId: executorRuntime.activeTurnId,
       turn: {
         outputText: 'Implementation ready'
       }
@@ -175,18 +200,53 @@ test('agent-main orchestrates planner, executor, and reviewer subagents through 
   })
 
   const snapshotAfterExecution = sessionStore.getSessionSnapshot('default')
-  const reviewerTask = snapshotAfterExecution.tasks.find((task) => task.id === `${dispatchResult.taskId}:reviewer`)
-  assert.equal(snapshotAfterExecution.tasks.find((task) => task.id === dispatchResult.taskId)?.status, 'reviewing')
-  assert.equal(snapshotAfterExecution.agents.find((agent) => agent.id === 'executor')?.status, 'idle')
-  assert.equal(snapshotAfterExecution.agents.find((agent) => agent.id === 'reviewer')?.status, 'working')
-  assert.ok(reviewerTask, 'expected reviewer task to be created after execution')
-  assert.equal(reviewerTask.status, 'executing')
+  const subagentTask = snapshotAfterExecution.tasks.find((task) => task.id === `${dispatchResult.taskId}:subagent`)
+  assert.equal(snapshotAfterExecution.tasks.find((task) => task.id === dispatchResult.taskId)?.status, 'executing')
+  assert.equal(snapshotAfterExecution.workflowAgents.find((agent) => agent.stageId === 'executor'), undefined)
+  assert.equal(snapshotAfterExecution.workflowAgents.find((agent) => agent.stageId === 'subagent')?.status, 'working')
+  assert.equal(snapshotAfterExecution.workflowAgents.find((agent) => agent.stageId === 'reviewer'), undefined)
+  assert.ok(subagentTask, 'expected subagent task to be created after execution')
+  assert.equal(subagentTask.status, 'executing')
+  assert.match(snapshotAfterExecution.workflowAgents.find((agent) => agent.stageId === 'subagent')?.name || '', /support/i)
+  assert.deepEqual(snapshotAfterExecution.tasks.find((task) => task.id === dispatchResult.taskId)?.subTasks, [
+    `${dispatchResult.taskId}:planner`,
+    `${dispatchResult.taskId}:executor`,
+    `${dispatchResult.taskId}:subagent`,
+  ])
 
+  const subagentRuntime = snapshotAfterExecution.workflowAgents.find((agent) => agent.stageId === 'subagent')
   await orchestrator.handleNotification({
     method: 'turn/completed',
     params: {
-      threadId: registry.getAgent('default', 'reviewer').threadId,
-      turnId: registry.getAgent('default', 'reviewer').activeTurnId,
+      threadId: subagentRuntime.threadId,
+      turnId: subagentRuntime.activeTurnId,
+      turn: {
+        outputText: 'Subagent support ready'
+      }
+    }
+  })
+
+  const snapshotAfterSubagent = sessionStore.getSessionSnapshot('default')
+  const reviewerTask = snapshotAfterSubagent.tasks.find((task) => task.id === `${dispatchResult.taskId}:reviewer`)
+  assert.equal(snapshotAfterSubagent.tasks.find((task) => task.id === dispatchResult.taskId)?.status, 'reviewing')
+  assert.equal(snapshotAfterSubagent.workflowAgents.find((agent) => agent.stageId === 'subagent'), undefined)
+  assert.equal(snapshotAfterSubagent.workflowAgents.find((agent) => agent.stageId === 'reviewer')?.status, 'working')
+  assert.ok(reviewerTask, 'expected reviewer task to be created after execution')
+  assert.equal(reviewerTask.status, 'executing')
+  assert.equal(snapshotAfterSubagent.workflowAgents.find((agent) => agent.stageId === 'reviewer')?.name, 'Quality Gate')
+  assert.deepEqual(snapshotAfterSubagent.tasks.find((task) => task.id === dispatchResult.taskId)?.subTasks, [
+    `${dispatchResult.taskId}:planner`,
+    `${dispatchResult.taskId}:executor`,
+    `${dispatchResult.taskId}:subagent`,
+    `${dispatchResult.taskId}:reviewer`,
+  ])
+
+  const reviewerRuntime = snapshotAfterSubagent.workflowAgents.find((agent) => agent.stageId === 'reviewer')
+  await orchestrator.handleNotification({
+    method: 'turn/completed',
+    params: {
+      threadId: reviewerRuntime.threadId,
+      turnId: reviewerRuntime.activeTurnId,
       turn: {
         outputText: 'Review approved'
       }
@@ -199,9 +259,67 @@ test('agent-main orchestrates planner, executor, and reviewer subagents through 
   assert.equal(completedParentTask?.status, 'completed')
   assert.match(completedParentTask?.result || '', /Plan ready/)
   assert.match(completedParentTask?.result || '', /Implementation ready/)
+  assert.match(completedParentTask?.result || '', /Subagent support ready/)
   assert.match(completedParentTask?.result || '', /Review approved/)
   assert.equal(snapshotAfterReview.agents.find((agent) => agent.id === 'agent-main')?.status, 'idle')
-  assert.equal(snapshotAfterReview.agents.find((agent) => agent.id === 'reviewer')?.status, 'idle')
+  assert.equal(snapshotAfterReview.workflowAgents.length, 0)
+
+  await orchestrator.stop()
+})
+
+test('simple team tasks skip the support workflow agent entirely', async () => {
+  const sessionStore = new SessionStore()
+  const registry = new AgentRegistry()
+  const client = new FakeCodexClient()
+  const blackboard = new FakeBlackboardStore()
+
+  const orchestrator = new CodexOrchestrator({
+    client,
+    registry,
+    blackboard,
+    sessionStore,
+    broadcast: () => {}
+  })
+
+  await orchestrator.start()
+
+  const dispatchResult = await orchestrator.dispatchTask('default', 'agent-main', {
+    title: 'Summarize changelog',
+    prompt: 'Summarize the latest changelog updates and review the final wording.'
+  })
+
+  const plannerRuntime = sessionStore.getSessionSnapshot('default').workflowAgents.find((agent) => agent.stageId === 'planner')
+  await orchestrator.handleNotification({
+    method: 'turn/completed',
+    params: {
+      threadId: plannerRuntime.threadId,
+      turnId: plannerRuntime.activeTurnId,
+      turn: {
+        outputText: 'Plan ready'
+      }
+    }
+  })
+
+  const executorRuntime = sessionStore.getSessionSnapshot('default').workflowAgents.find((agent) => agent.stageId === 'executor')
+  await orchestrator.handleNotification({
+    method: 'turn/completed',
+    params: {
+      threadId: executorRuntime.threadId,
+      turnId: executorRuntime.activeTurnId,
+      turn: {
+        outputText: 'Draft summary ready'
+      }
+    }
+  })
+
+  const snapshotAfterExecution = sessionStore.getSessionSnapshot('default')
+  assert.equal(snapshotAfterExecution.workflowAgents.find((agent) => agent.stageId === 'subagent'), undefined)
+  assert.equal(snapshotAfterExecution.workflowAgents.find((agent) => agent.stageId === 'reviewer')?.status, 'working')
+  assert.deepEqual(snapshotAfterExecution.tasks.find((task) => task.id === dispatchResult.taskId)?.subTasks, [
+    `${dispatchResult.taskId}:planner`,
+    `${dispatchResult.taskId}:executor`,
+    `${dispatchResult.taskId}:reviewer`,
+  ])
 
   await orchestrator.stop()
 })

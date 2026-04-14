@@ -64,7 +64,12 @@ class CodexOrchestrator {
     const session = this.sessionStore.ensureSession(sessionId)
     const normalizedSessionId = session.id
     const agent = this.registry.ensureAgent(normalizedSessionId, agentId, {
-      harness: options.harness || {}
+      harness: options.harness || {},
+      name: options.name,
+      role: options.role,
+      ephemeral: options.ephemeral,
+      workflowParentTaskId: options.workflowParentTaskId,
+      stageId: options.stageId
     })
 
     if (!agent.threadId) {
@@ -98,8 +103,8 @@ class CodexOrchestrator {
       const activeTask = this.registry.getActiveTask(agent.sessionId, agent.agentId)
       return {
         ...agent,
-        name: agent.agentId,
-        role: getAgentRole(agent.agentId),
+        name: agent.name || readableAgentName(agent.agentId),
+        role: agent.role || getAgentRole(agent.stageId || agent.agentId),
         currentTask: activeTask ? activeTask.title : null
       }
     })
@@ -219,8 +224,6 @@ class CodexOrchestrator {
     const coordinator = await this.createOrActivateAgent(sessionId, 'agent-main', {
       harness: payload.harness || {}
     })
-    await this.ensureTeamSubagents(coordinator.sessionId, payload.harness || {})
-
     const parentTaskId = payload.taskId || `codex_task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
     const createdAt = new Date().toISOString()
     const parentTask = {
@@ -233,7 +236,7 @@ class CodexOrchestrator {
       createdAt,
       updatedAt: createdAt,
       turnHistory: [],
-      subTasks: buildWorkflowSubTaskIds(parentTaskId)
+      subTasks: []
     }
 
     this.registry.addTask(coordinator.sessionId, coordinator.agentId, parentTask)
@@ -267,9 +270,10 @@ class CodexOrchestrator {
       title,
       prompt,
       priority: parentTask.priority,
-      stages: ['planner', 'executor', 'reviewer'],
+      stages: BASE_WORKFLOW_STAGES,
       stageTaskIds: new Map(),
-      stageResults: new Map()
+      stageResults: new Map(),
+      needsSupportStage: null
     }
 
     this.trackWorkflow(workflow, parentTaskId)
@@ -283,19 +287,21 @@ class CodexOrchestrator {
     }
   }
 
-  async ensureTeamSubagents(sessionId, harness = {}) {
-    await Promise.all(['planner', 'executor', 'reviewer'].map((agentId) => {
-      return this.createOrActivateAgent(sessionId, agentId, { harness })
-    }))
-  }
-
-  async startWorkflowStage(workflow, stageAgentId) {
-    const stageTitle = `${workflow.title} · ${humanizeStage(stageAgentId)}`
-    const stageTaskId = `${workflow.parentTaskId}:${stageAgentId}`
-    const stagePrompt = this.buildStagePrompt(workflow, stageAgentId)
-    const stageAgent = await this.createOrActivateAgent(workflow.sessionId, stageAgentId)
-    const runtimeAgent = this.registry.getAgent(workflow.sessionId, stageAgentId)
-    const parentStatus = parentStatusForStage(stageAgentId)
+  async startWorkflowStage(workflow, stageId) {
+    const stageRuntimeAgentId = workflowAgentId(workflow.parentTaskId, stageId)
+    const descriptor = getStageDescriptor(stageId, workflow)
+    const stageTitle = `${workflow.title} · ${descriptor.name}`
+    const stageTaskId = `${workflow.parentTaskId}:${stageId}`
+    const stagePrompt = this.buildStagePrompt(workflow, stageId)
+    await this.createOrActivateAgent(workflow.sessionId, stageRuntimeAgentId, {
+      name: descriptor.name,
+      role: descriptor.role,
+      ephemeral: true,
+      workflowParentTaskId: workflow.parentTaskId,
+      stageId
+    })
+    const runtimeAgent = this.registry.getAgent(workflow.sessionId, stageRuntimeAgentId)
+    const parentStatus = parentStatusForStage(stageId)
     const createdAt = new Date().toISOString()
     const stageTask = {
       taskId: stageTaskId,
@@ -307,16 +313,17 @@ class CodexOrchestrator {
       createdAt,
       updatedAt: createdAt,
       turnHistory: [],
-      parentTaskId: workflow.parentTaskId
+      parentTaskId: workflow.parentTaskId,
+      stageId
     }
 
-    workflow.stageTaskIds.set(stageAgentId, stageTaskId)
+    workflow.stageTaskIds.set(stageId, stageTaskId)
     this.trackWorkflow(workflow, stageTaskId)
-    this.registry.addTask(workflow.sessionId, stageAgentId, stageTask)
-    this.registry.setActiveTask(workflow.sessionId, stageAgentId, stageTaskId)
+    this.registry.addTask(workflow.sessionId, stageRuntimeAgentId, stageTask)
+    this.registry.setActiveTask(workflow.sessionId, stageRuntimeAgentId, stageTaskId)
     this.registry.updateTask(workflow.sessionId, workflow.parentAgentId, workflow.parentTaskId, {
       status: parentStatus,
-      subTasks: buildWorkflowSubTaskIds(workflow.parentTaskId)
+      subTasks: getWorkflowSubTaskIds(workflow)
     })
     this.syncRuntimeTaskToSession(
       workflow.sessionId,
@@ -326,7 +333,7 @@ class CodexOrchestrator {
 
     await this.blackboard.appendEvent({
       sessionId: workflow.sessionId,
-      agentId: stageAgentId,
+      agentId: stageRuntimeAgentId,
       threadId: runtimeAgent.threadId,
       type: 'task_assigned',
       task: {
@@ -338,9 +345,10 @@ class CodexOrchestrator {
       payload: {
         prompt: stagePrompt,
         parentTaskId: workflow.parentTaskId,
-        orchestration: 'agent_team'
+        orchestration: 'agent_team',
+        stageId
       },
-      idempotencyKey: `${workflow.sessionId}:${stageAgentId}:${stageTaskId}:assigned`
+      idempotencyKey: `${workflow.sessionId}:${stageRuntimeAgentId}:${stageTaskId}:assigned`
     })
 
     const turnResult = await this.client.startTurn({
@@ -352,18 +360,18 @@ class CodexOrchestrator {
     })
 
     const turnId = extractTurnId(turnResult)
-    this.registry.updateAgentState(workflow.sessionId, stageAgentId, 'working', turnId)
-    this.registry.updateTask(workflow.sessionId, stageAgentId, stageTaskId, {
+    this.registry.updateAgentState(workflow.sessionId, stageRuntimeAgentId, 'working', turnId)
+    this.registry.updateTask(workflow.sessionId, stageRuntimeAgentId, stageTaskId, {
       status: 'executing',
       turnId,
       turnHistory: [turnId].filter(Boolean)
     })
 
-    const syncedStageTask = this.registry.getTask(workflow.sessionId, stageAgentId, stageTaskId)
-    this.syncRuntimeTaskToSession(workflow.sessionId, stageAgentId, syncedStageTask)
+    const syncedStageTask = this.registry.getTask(workflow.sessionId, stageRuntimeAgentId, stageTaskId)
+    this.syncRuntimeTaskToSession(workflow.sessionId, stageRuntimeAgentId, syncedStageTask)
     this.emitTaskUpdate(workflow.sessionId, workflow.parentTaskId, {
       status: parentStatus,
-      stage: stageAgentId,
+      stage: stageId,
       updatedAt: new Date().toISOString(),
       agentId: workflow.parentAgentId
     })
@@ -371,11 +379,12 @@ class CodexOrchestrator {
       status: 'executing',
       turnId,
       updatedAt: new Date().toISOString(),
-      agentId: stageAgentId,
-      parentTaskId: workflow.parentTaskId
+      agentId: stageRuntimeAgentId,
+      parentTaskId: workflow.parentTaskId,
+      stageId
     })
     this.emitAgentStatus(serializeAgent(this.registry.getAgent(workflow.sessionId, workflow.parentAgentId)))
-    this.emitAgentStatus(serializeAgent(this.registry.getAgent(workflow.sessionId, stageAgentId)))
+    this.emitAgentStatus(serializeAgent(this.registry.getAgent(workflow.sessionId, stageRuntimeAgentId)))
 
     return {
       taskId: stageTaskId,
@@ -387,10 +396,12 @@ class CodexOrchestrator {
   buildStagePrompt(workflow, stageAgentId) {
     const plan = workflow.stageResults.get('planner') || ''
     const execution = workflow.stageResults.get('executor') || ''
+    const subagentOutput = workflow.stageResults.get('subagent') || ''
+    const descriptor = getStageDescriptor(stageAgentId, workflow)
 
     if (stageAgentId === 'planner') {
       return [
-        'You are the planning specialist in a Codex agent team.',
+        `You are ${descriptor.name}, responsible for ${descriptor.role.toLowerCase()}.`,
         `Parent task: ${workflow.title}`,
         `User request: ${workflow.prompt}`,
         'Produce a concise execution plan, success criteria, and handoff notes for the executor.'
@@ -399,20 +410,32 @@ class CodexOrchestrator {
 
     if (stageAgentId === 'executor') {
       return [
-        'You are the execution specialist in a Codex agent team.',
+        `You are ${descriptor.name}, responsible for ${descriptor.role.toLowerCase()}.`,
         `Parent task: ${workflow.title}`,
         `User request: ${workflow.prompt}`,
         `Planner output:\n${plan || 'No planner output provided.'}`,
-        'Carry out the implementation or analysis requested. End with a concise execution summary for the reviewer.'
+        'Carry out the implementation or analysis requested. End with a concise execution summary for the next specialist.'
+      ].join('\n\n')
+    }
+
+    if (stageAgentId === 'subagent') {
+      return [
+        `You are ${descriptor.name}, responsible for ${descriptor.role.toLowerCase()}.`,
+        `Parent task: ${workflow.title}`,
+        `User request: ${workflow.prompt}`,
+        `Planner output:\n${plan || 'No planner output provided.'}`,
+        `Executor output:\n${execution || 'No executor output provided.'}`,
+        'Provide focused support work that strengthens the implementation, then end with a concise handoff summary for the reviewer.'
       ].join('\n\n')
     }
 
     return [
-      'You are the reviewer in a Codex agent team.',
+      `You are ${descriptor.name}, responsible for ${descriptor.role.toLowerCase()}.`,
       `Parent task: ${workflow.title}`,
       `User request: ${workflow.prompt}`,
       `Planner output:\n${plan || 'No planner output provided.'}`,
       `Executor output:\n${execution || 'No executor output provided.'}`,
+      `Subagent output:\n${subagentOutput || 'No subagent output provided.'}`,
       'Review the work, identify risks, and state whether the result is ready.'
     ].join('\n\n')
   }
@@ -437,23 +460,24 @@ class CodexOrchestrator {
       return
     }
 
-    workflow.stageResults.set(agent.agentId, result || '')
-    const currentStageIndex = workflow.stages.indexOf(agent.agentId)
-    const nextStageId = workflow.stages[currentStageIndex + 1] || null
+    const stageId = task.stageId || parseStageId(task.taskId)
+    workflow.stageResults.set(stageId, result || '')
+    await this.closeWorkflowAgent(workflow, stageId)
+    const nextStageId = this.getNextWorkflowStage(workflow, stageId, result || '')
 
     if (nextStageId) {
       await this.startWorkflowStage(workflow, nextStageId)
       return
     }
 
-    const parentResult = workflow.stages
-      .map((stageId) => `${humanizeStage(stageId)}\n${workflow.stageResults.get(stageId) || ''}`.trim())
+    const parentResult = getWorkflowSummaryStages(workflow)
+      .map((stageId) => `${getStageDescriptor(stageId, workflow).name}\n${workflow.stageResults.get(stageId) || ''}`.trim())
       .join('\n\n')
 
     const updatedParentTask = this.registry.updateTask(workflow.sessionId, workflow.parentAgentId, workflow.parentTaskId, {
       status: 'completed',
       result: parentResult,
-      subTasks: buildWorkflowSubTaskIds(workflow.parentTaskId)
+      subTasks: getWorkflowSubTaskIds(workflow)
     })
 
     if (updatedParentTask) {
@@ -469,7 +493,8 @@ class CodexOrchestrator {
     this.registry.setActiveTask(workflow.sessionId, workflow.parentAgentId, null)
     this.registry.updateAgentState(workflow.sessionId, workflow.parentAgentId, 'idle', null)
     this.emitAgentStatus(serializeAgent(this.registry.getAgent(workflow.sessionId, workflow.parentAgentId)))
-    this.teamWorkflows.delete(workflowKey(workflow.sessionId, workflow.parentTaskId))
+    await this.closeWorkflowAgents(workflow)
+    this.cleanupWorkflow(workflow)
   }
 
   async failWorkflow(agent, task, error) {
@@ -481,7 +506,7 @@ class CodexOrchestrator {
     const updatedParentTask = this.registry.updateTask(workflow.sessionId, workflow.parentAgentId, workflow.parentTaskId, {
       status: 'failed',
       error,
-      subTasks: buildWorkflowSubTaskIds(workflow.parentTaskId)
+      subTasks: getWorkflowSubTaskIds(workflow)
     })
 
     if (updatedParentTask) {
@@ -497,7 +522,56 @@ class CodexOrchestrator {
     this.registry.setActiveTask(workflow.sessionId, workflow.parentAgentId, null)
     this.registry.updateAgentState(workflow.sessionId, workflow.parentAgentId, 'error', null)
     this.emitAgentStatus(serializeAgent(this.registry.getAgent(workflow.sessionId, workflow.parentAgentId)))
+    await this.closeWorkflowAgent(workflow, task.stageId || parseStageId(task.taskId))
+    await this.closeWorkflowAgents(workflow)
+    this.cleanupWorkflow(workflow)
+  }
+
+  async closeWorkflowAgents(workflow) {
+    for (const stageId of ALL_WORKFLOW_STAGES) {
+      await this.closeWorkflowAgent(workflow, stageId)
+    }
+  }
+
+  async closeWorkflowAgent(workflow, stageId) {
+    if (!stageId) {
+      return
+    }
+
+    const agentId = workflowAgentId(workflow.parentTaskId, stageId)
+    const runtimeAgent = this.registry.getAgent(workflow.sessionId, agentId)
+    if (!runtimeAgent || runtimeAgent.state === 'closed') {
+      return
+    }
+
+    this.registry.closeAgent(workflow.sessionId, agentId)
+    this.emitAgentStatus(serializeAgent(this.registry.getAgent(workflow.sessionId, agentId)))
+  }
+
+  getNextWorkflowStage(workflow, completedStageId, stageResult) {
+    if (completedStageId === 'planner') {
+      return 'executor'
+    }
+
+    if (completedStageId === 'executor') {
+      const needsSupportStage = shouldUseSupportStage(workflow, stageResult)
+      workflow.needsSupportStage = needsSupportStage
+      return needsSupportStage ? 'subagent' : 'reviewer'
+    }
+
+    if (completedStageId === 'subagent') {
+      return 'reviewer'
+    }
+
+    return null
+  }
+
+  cleanupWorkflow(workflow) {
     this.teamWorkflows.delete(workflowKey(workflow.sessionId, workflow.parentTaskId))
+    this.teamTaskIndex.delete(workflowTaskKey(workflow.sessionId, workflow.parentTaskId))
+    for (const stageTaskId of workflow.stageTaskIds.values()) {
+      this.teamTaskIndex.delete(workflowTaskKey(workflow.sessionId, stageTaskId))
+    }
   }
 
   async interrupt(sessionId, agentId) {
@@ -1205,7 +1279,13 @@ class CodexOrchestrator {
         agentId: agent.agentId,
         data: {
           status: mappedStatus,
-          currentTask: runtimeTask ? runtimeTask.title : null
+          currentTask: runtimeTask ? runtimeTask.title : null,
+          name: agent.name || readableAgentName(agent.agentId),
+          role: agent.role || getAgentRole(agent.stageId || agent.agentId),
+          ephemeral: Boolean(agent.ephemeral),
+          workflowParentTaskId: agent.workflowParentTaskId || null,
+          stageId: agent.stageId || null,
+          lifecycle: agent.state
         }
       }
     })
@@ -1250,6 +1330,7 @@ class CodexOrchestrator {
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
       agentId,
+      stageId: task.stageId || null,
       result: task.result || null,
       error: task.error || null,
       priority: task.priority || 'normal',
@@ -1261,8 +1342,23 @@ class CodexOrchestrator {
   }
 }
 
-function buildWorkflowSubTaskIds(parentTaskId) {
-  return ['planner', 'executor', 'reviewer'].map((stageId) => `${parentTaskId}:${stageId}`)
+function getWorkflowSubTaskIds(workflow) {
+  return ALL_WORKFLOW_STAGES
+    .filter((stageId) => workflow.stageTaskIds.has(stageId))
+    .map((stageId) => workflow.stageTaskIds.get(stageId))
+}
+
+function workflowAgentId(parentTaskId, stageId) {
+  return `${parentTaskId}::${stageId}`
+}
+
+function parseStageId(taskId) {
+  if (typeof taskId !== 'string') {
+    return null
+  }
+
+  const parts = taskId.split(':')
+  return parts.length > 1 ? parts[parts.length - 1] : null
 }
 
 function workflowKey(sessionId, parentTaskId) {
@@ -1275,13 +1371,16 @@ function workflowTaskKey(sessionId, taskId) {
 
 function humanizeStage(stageId) {
   if (stageId === 'planner') {
-    return 'Planning'
+    return 'Task Breakdown'
   }
   if (stageId === 'executor') {
-    return 'Execution'
+    return 'Primary Build'
+  }
+  if (stageId === 'subagent') {
+    return 'Focused Support'
   }
   if (stageId === 'reviewer') {
-    return 'Review'
+    return 'Quality Gate'
   }
   return stageId
 }
@@ -1301,15 +1400,115 @@ function getAgentRole(agentId) {
     return 'Main coordinator'
   }
   if (agentId === 'planner') {
-    return 'Planning specialist'
+    return 'Turns the request into an execution plan and handoff.'
   }
   if (agentId === 'executor') {
-    return 'Execution specialist'
+    return 'Carries the main implementation or analysis work.'
+  }
+  if (agentId === 'subagent') {
+    return 'Provides targeted support work when the task needs a second specialist.'
   }
   if (agentId === 'reviewer') {
-    return 'Review specialist'
+    return 'Checks correctness, risk, and readiness before handoff.'
   }
   return 'Codex controlled agent'
+}
+
+function readableAgentName(agentId) {
+  if (agentId === 'agent-main') {
+    return 'agent-main'
+  }
+  return humanizeStage(agentId)
+}
+
+const BASE_WORKFLOW_STAGES = ['planner', 'executor', 'reviewer']
+const ALL_WORKFLOW_STAGES = ['planner', 'executor', 'subagent', 'reviewer']
+
+function getStageDescriptor(stageId, workflow) {
+  if (stageId === 'planner') {
+    return {
+      name: 'Task Breakdown',
+      role: 'Turns the request into an execution plan and handoff.'
+    }
+  }
+
+  if (stageId === 'executor') {
+    return {
+      name: 'Primary Build',
+      role: 'Carries the main implementation or analysis work.'
+    }
+  }
+
+  if (stageId === 'subagent') {
+    return inferSupportStageDescriptor(workflow)
+  }
+
+  if (stageId === 'reviewer') {
+    return {
+      name: 'Quality Gate',
+      role: 'Checks correctness, risk, and readiness before handoff.'
+    }
+  }
+
+  return {
+    name: humanizeStage(stageId),
+    role: 'Codex controlled agent'
+  }
+}
+
+function inferSupportStageDescriptor(workflow) {
+  const supportText = `${workflow.prompt}\n${workflow.stageResults.get('planner') || ''}\n${workflow.stageResults.get('executor') || ''}`.toLowerCase()
+
+  if (/\b(ui|ux|design|layout|frontend|react|css|visual)\b/.test(supportText)) {
+    return {
+      name: 'UI Support',
+      role: 'Strengthens interface structure, interaction details, and visual polish.'
+    }
+  }
+
+  if (/\b(api|backend|server|database|schema|query|endpoint)\b/.test(supportText)) {
+    return {
+      name: 'Backend Support',
+      role: 'Strengthens backend behavior, data flow, and integration details.'
+    }
+  }
+
+  if (/\b(test|verify|validation|qa|regression|coverage)\b/.test(supportText)) {
+    return {
+      name: 'Verification Support',
+      role: 'Adds focused verification work, edge-case checks, and validation support.'
+    }
+  }
+
+  if (/\b(research|compare|investigate|analy[sz]e|benchmark)\b/.test(supportText)) {
+    return {
+      name: 'Research Support',
+      role: 'Provides focused investigation, comparison, and evidence gathering.'
+    }
+  }
+
+  if (/\b(doc|copy|write|spec|summary|handoff)\b/.test(supportText)) {
+    return {
+      name: 'Documentation Support',
+      role: 'Improves documentation, summaries, and handoff clarity.'
+    }
+  }
+
+  return {
+    name: 'Focused Support',
+    role: 'Provides targeted support work when the task needs a second specialist.'
+  }
+}
+
+function shouldUseSupportStage(workflow, stageResult = '') {
+  const signalText = `${workflow.prompt}\n${workflow.stageResults.get('planner') || ''}\n${stageResult || ''}`.toLowerCase()
+
+  return /\b(parallel|support|assist|investigate|research|verify|validation|qa|regression|compare|frontend|backend|api|database|ui|ux|refactor|migrate|integrate|handoff)\b/.test(signalText)
+    || workflow.prompt.trim().length > 180
+}
+
+function getWorkflowSummaryStages(workflow) {
+  return ALL_WORKFLOW_STAGES.filter((stageId) => workflow.stageResults.has(stageId))
 }
 
 function extractThreadId(source) {

@@ -40,6 +40,15 @@ class AgentManager {
         taskHistory: [],
         logs: []
       },
+      subagent: {
+        id: 'subagent',
+        name: 'Subagent',
+        role: '子任务支援',
+        status: AgentState.IDLE,
+        currentTask: null,
+        taskHistory: [],
+        logs: []
+      },
       reviewer: {
         id: 'reviewer',
         name: 'Reviewer',

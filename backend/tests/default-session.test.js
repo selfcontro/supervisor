@@ -22,5 +22,8 @@ test('default session snapshot is always available', async (t) => {
   assert.equal(payload.session.id, 'default')
   assert.ok(Array.isArray(payload.tasks))
   assert.ok(Array.isArray(payload.agents))
+  assert.ok(Array.isArray(payload.workflowAgents))
   assert.ok(Array.isArray(payload.logs))
+  assert.ok(payload.agents.length > 0)
+  assert.ok(payload.agents.some((agent) => agent.id === 'agent-main'))
 })

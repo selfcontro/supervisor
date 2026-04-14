@@ -325,7 +325,7 @@ async function hydrateSessionStoreFromBlackboard({ sessionStore, blackboardStore
         })
       }
 
-      if (event.agentId) {
+      if (event.agentId && isPersistentSessionAgent(event.agentId)) {
         sessionStore.syncAgent(sessionId, {
           id: event.agentId,
           name: event.agentId,
@@ -377,4 +377,16 @@ function mapBlackboardAgentStatus(event) {
   }
 
   return 'idle'
+}
+
+function isPersistentSessionAgent(agentId) {
+  if (typeof agentId !== 'string' || !agentId.trim()) {
+    return false
+  }
+
+  if (agentId.includes('::')) {
+    return false
+  }
+
+  return !['planner', 'executor', 'subagent', 'reviewer'].includes(agentId)
 }

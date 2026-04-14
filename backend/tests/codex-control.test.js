@@ -79,6 +79,10 @@ async function createHarness() {
   }
 }
 
+function getWorkflowAgent(registry, sessionId, parentTaskId, stageId) {
+  return registry.getAgent(sessionId, `${parentTaskId}::${stageId}`)
+}
+
 test('creates agent and dispatches task with blackboard records', async () => {
   const harness = await createHarness()
 
@@ -184,13 +188,15 @@ test('renders a team onboarding checklist card in session blackboard markdown', 
   assert.match(markdown, /### Tiny onboarding checklist/)
   assert.match(markdown, /- \[ \] Planning/)
   assert.match(markdown, /- \[ \] Execution/)
+  assert.match(markdown, /- \[ \] Subagent/)
   assert.match(markdown, /- \[ \] Review/)
 
+  const plannerAgent = getWorkflowAgent(harness.orchestrator.registry, 'sessionC', dispatch.taskId, 'planner')
   await harness.orchestrator.handleNotification({
     method: 'turn/completed',
     params: {
-      threadId: harness.orchestrator.registry.getAgent('sessionC', 'planner').threadId,
-      turnId: harness.orchestrator.registry.getAgent('sessionC', 'planner').activeTurnId,
+      threadId: plannerAgent.threadId,
+      turnId: plannerAgent.activeTurnId,
       turn: {
         outputText: 'Plan ready'
       }
@@ -201,22 +207,40 @@ test('renders a team onboarding checklist card in session blackboard markdown', 
   assert.match(markdown, /- \[x\] Planning/)
   assert.match(markdown, /- \[ \] Execution/)
 
+  const executorAgent = getWorkflowAgent(harness.orchestrator.registry, 'sessionC', dispatch.taskId, 'executor')
   await harness.orchestrator.handleNotification({
     method: 'turn/completed',
     params: {
-      threadId: harness.orchestrator.registry.getAgent('sessionC', 'executor').threadId,
-      turnId: harness.orchestrator.registry.getAgent('sessionC', 'executor').activeTurnId,
+      threadId: executorAgent.threadId,
+      turnId: executorAgent.activeTurnId,
       turn: {
         outputText: 'Execution done'
       }
     }
   })
 
+  markdown = await harness.orchestrator.getSessionMarkdown('sessionC')
+  assert.match(markdown, /- \[x\] Execution/)
+  assert.match(markdown, /- \[ \] Subagent/)
+
+  const subagentAgent = getWorkflowAgent(harness.orchestrator.registry, 'sessionC', dispatch.taskId, 'subagent')
   await harness.orchestrator.handleNotification({
     method: 'turn/completed',
     params: {
-      threadId: harness.orchestrator.registry.getAgent('sessionC', 'reviewer').threadId,
-      turnId: harness.orchestrator.registry.getAgent('sessionC', 'reviewer').activeTurnId,
+      threadId: subagentAgent.threadId,
+      turnId: subagentAgent.activeTurnId,
+      turn: {
+        outputText: 'Subagent done'
+      }
+    }
+  })
+
+  const reviewerAgent = getWorkflowAgent(harness.orchestrator.registry, 'sessionC', dispatch.taskId, 'reviewer')
+  await harness.orchestrator.handleNotification({
+    method: 'turn/completed',
+    params: {
+      threadId: reviewerAgent.threadId,
+      turnId: reviewerAgent.activeTurnId,
       turn: {
         outputText: 'Review approved'
       }
@@ -226,6 +250,7 @@ test('renders a team onboarding checklist card in session blackboard markdown', 
   markdown = await harness.orchestrator.getSessionMarkdown('sessionC')
   assert.match(markdown, /- \[x\] Planning/)
   assert.match(markdown, /- \[x\] Execution/)
+  assert.match(markdown, /- \[x\] Subagent/)
   assert.match(markdown, /- \[x\] Review/)
 
   await harness.orchestrator.stop()
