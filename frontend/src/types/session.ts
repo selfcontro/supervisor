@@ -7,12 +7,14 @@ export type TaskStatus =
   | 'executing'
   | 'reviewing'
   | 'completed'
+  | 'awaiting_finish'
   | 'rejected'
   | 'interrupted'
   | 'failed'
   | 'working'
   | 'error'
   | 'idle'
+  | 'waiting'
 
 export type LogLevel = 'debug' | 'info' | 'warning' | 'error'
 
@@ -62,6 +64,7 @@ export type SessionAgent = Omit<Agent, 'currentTask'> & {
   currentTask?: string | null
   role?: string
   ephemeral?: boolean
+  lifecycle?: string | null
   workflowParentTaskId?: string | null
   stageId?: string | null
   threadId?: string | null

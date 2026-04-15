@@ -1,6 +1,7 @@
 export const statusColors = {
   idle: '#22c55e',
   working: '#2563eb',
+  waiting: '#94a3b8',
   completed: '#3b82f6',
   error: '#ef4444',
 } as const
@@ -8,6 +9,7 @@ export const statusColors = {
 export const statusLabels = {
   idle: 'Idle',
   working: 'Working',
+  waiting: 'Waiting',
   completed: 'Completed',
   error: 'Error',
 } as const

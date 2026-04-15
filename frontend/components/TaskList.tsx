@@ -18,10 +18,12 @@ const statusConfig: Record<TaskStatus, { label: string; color: string; bgColor: 
   executing: { label: 'Executing', color: '#7dd3fc', bgColor: 'rgba(14,165,233,0.2)' },
   reviewing: { label: 'Reviewing', color: '#6ee7b7', bgColor: 'rgba(16,185,129,0.2)' },
   completed: { label: 'Completed', color: '#86efac', bgColor: 'rgba(34,197,94,0.2)' },
+  awaiting_finish: { label: 'Awaiting Finish', color: '#fde68a', bgColor: 'rgba(251,191,36,0.2)' },
   rejected: { label: 'Rejected', color: '#fca5a5', bgColor: 'rgba(239,68,68,0.2)' },
   interrupted: { label: 'Interrupted', color: '#fca5a5', bgColor: 'rgba(244,114,182,0.2)' },
   failed: { label: 'Failed', color: '#fca5a5', bgColor: 'rgba(239,68,68,0.2)' },
   working: { label: 'Working', color: '#7dd3fc', bgColor: 'rgba(14,165,233,0.2)' },
+  waiting: { label: 'Waiting', color: '#cbd5e1', bgColor: 'rgba(148,163,184,0.18)' },
   error: { label: 'Error', color: '#fca5a5', bgColor: 'rgba(239,68,68,0.2)' },
   idle: { label: 'Idle', color: '#cbd5e1', bgColor: 'rgba(148,163,184,0.18)' },
 }

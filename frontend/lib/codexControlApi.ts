@@ -104,6 +104,15 @@ export async function retryCodexTask(sessionId: string, agentId: string, taskId:
   )
 }
 
+export async function finishCodexTask(sessionId: string, taskId: string) {
+  return request<{ ok: boolean; taskId: string; status: string }>(
+    `/api/codex-control/sessions/${encodeURIComponent(sessionId)}/tasks/${encodeURIComponent(taskId)}/finish`,
+    {
+      method: 'POST',
+    }
+  )
+}
+
 export async function closeCodexAgent(sessionId: string, agentId: string) {
   return request<{ ok: boolean }>(
     `/api/codex-control/sessions/${encodeURIComponent(sessionId)}/agents/${encodeURIComponent(agentId)}/close`,

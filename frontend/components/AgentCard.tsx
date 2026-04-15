@@ -14,6 +14,7 @@ interface AgentCardProps {
 const statusColors: Record<string, string> = {
   idle: 'bg-[rgba(71,85,105,0.68)]',
   working: 'bg-[var(--accent-2)]',
+  waiting: 'bg-[rgba(148,163,184,0.82)]',
   completed: 'bg-[var(--success)]',
   error: 'bg-[var(--danger)]',
   done: 'bg-[var(--success)]',
