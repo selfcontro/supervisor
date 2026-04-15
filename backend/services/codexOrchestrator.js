@@ -401,42 +401,50 @@ class CodexOrchestrator {
 
     if (stageAgentId === 'planner') {
       return [
-        `You are ${descriptor.name}, responsible for ${descriptor.role.toLowerCase()}.`,
+        `You are ${descriptor.name}. ${descriptor.role}`,
         `Parent task: ${workflow.title}`,
         `User request: ${workflow.prompt}`,
-        'Produce a concise execution plan, success criteria, and handoff notes for the executor.'
+        'This is a fast orchestration step, not a full design or spec exercise.',
+        'Do not read skill documents, do not start brainstorming/spec-writing workflows, and do not scan the whole repository.',
+        'Inspect only the minimum context needed, with a hard cap of 3 directly relevant files or commands.',
+        'Return a compact handoff with exactly these sections: Scope, Plan, Risks, Handoff.',
+        'Keep the response under 180 words.'
       ].join('\n\n')
     }
 
     if (stageAgentId === 'executor') {
       return [
-        `You are ${descriptor.name}, responsible for ${descriptor.role.toLowerCase()}.`,
+        `You are ${descriptor.name}. ${descriptor.role}`,
         `Parent task: ${workflow.title}`,
         `User request: ${workflow.prompt}`,
         `Planner output:\n${plan || 'No planner output provided.'}`,
-        'Carry out the implementation or analysis requested. End with a concise execution summary for the next specialist.'
+        'Carry out the implementation or analysis requested.',
+        'Stay focused on the handed-off scope. Do not restart planning or broad repo discovery.',
+        'End with a concise execution summary for the next specialist.'
       ].join('\n\n')
     }
 
     if (stageAgentId === 'subagent') {
       return [
-        `You are ${descriptor.name}, responsible for ${descriptor.role.toLowerCase()}.`,
+        `You are ${descriptor.name}. ${descriptor.role}`,
         `Parent task: ${workflow.title}`,
         `User request: ${workflow.prompt}`,
         `Planner output:\n${plan || 'No planner output provided.'}`,
         `Executor output:\n${execution || 'No executor output provided.'}`,
-        'Provide focused support work that strengthens the implementation, then end with a concise handoff summary for the reviewer.'
+        'Do one focused support pass only. Avoid re-planning the whole task.',
+        'End with a concise handoff summary for the reviewer.'
       ].join('\n\n')
     }
 
     return [
-      `You are ${descriptor.name}, responsible for ${descriptor.role.toLowerCase()}.`,
+      `You are ${descriptor.name}. ${descriptor.role}`,
       `Parent task: ${workflow.title}`,
       `User request: ${workflow.prompt}`,
       `Planner output:\n${plan || 'No planner output provided.'}`,
       `Executor output:\n${execution || 'No executor output provided.'}`,
       `Subagent output:\n${subagentOutput || 'No subagent output provided.'}`,
-      'Review the work, identify risks, and state whether the result is ready.'
+      'Review the work, identify concrete risks, and state whether the result is ready.',
+      'Keep the review concise and decision-oriented.'
     ].join('\n\n')
   }
 

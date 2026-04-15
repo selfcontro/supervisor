@@ -323,3 +323,37 @@ test('simple team tasks skip the support workflow agent entirely', async () => {
 
   await orchestrator.stop()
 })
+
+test('planner prompt stays constrained to a short orchestration step', async () => {
+  const sessionStore = new SessionStore()
+  const registry = new AgentRegistry()
+  const client = new FakeCodexClient()
+  const blackboard = new FakeBlackboardStore()
+
+  const orchestrator = new CodexOrchestrator({
+    client,
+    registry,
+    blackboard,
+    sessionStore,
+    broadcast: () => {}
+  })
+
+  await orchestrator.start()
+
+  await orchestrator.dispatchTask('default', 'agent-main', {
+    title: 'Constrained planner prompt',
+    prompt: 'Plan, implement, and review a small workspace refinement.'
+  })
+
+  const plannerAssignment = blackboard.events.find((event) => {
+    return event.type === 'task_assigned' && event.task?.taskId?.endsWith(':planner')
+  })
+
+  assert.ok(plannerAssignment, 'expected planner task assignment event to exist')
+  assert.match(plannerAssignment.payload?.prompt || '', /not a full design or spec exercise/i)
+  assert.match(plannerAssignment.payload?.prompt || '', /do not read skill documents/i)
+  assert.match(plannerAssignment.payload?.prompt || '', /hard cap of 3 directly relevant files or commands/i)
+  assert.match(plannerAssignment.payload?.prompt || '', /exactly these sections: Scope, Plan, Risks, Handoff/i)
+
+  await orchestrator.stop()
+})
