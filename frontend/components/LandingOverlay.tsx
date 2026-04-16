@@ -7,6 +7,7 @@ import VariableProximity from './VariableProximity'
 
 export default function LandingOverlay() {
   const containerRef = useRef<HTMLDivElement>(null)
+  const linksRef = useRef<HTMLDivElement>(null)
 
   return (
     <section className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-6">
@@ -24,25 +25,27 @@ export default function LandingOverlay() {
         <p className="mt-4 text-sm leading-relaxed text-slate-200">
           A minimal control surface for orchestrating Codex-backed agent workflows in real time.
         </p>
-        <div className="mt-7 flex items-center justify-center gap-6 text-sm">
+        <div ref={linksRef} className="mt-7 flex items-center justify-center gap-8">
           <Link href="/workspace/default" className="text-cyan-200">
             <VariableProximity
               label="Get Start"
-              containerRef={containerRef}
-              radius={110}
-              falloff="gaussian"
-              fromFontVariationSettings="'wght' 420, 'opsz' 14"
-              toFontVariationSettings="'wght' 980, 'opsz' 42"
+              className="text-base tracking-[0.01em]"
+              containerRef={linksRef}
+              radius={220}
+              falloff="linear"
+              fromFontVariationSettings="'wght' 320, 'opsz' 12"
+              toFontVariationSettings="'wght' 1000, 'opsz' 44"
             />
           </Link>
           <Link href="/learn-more" className="text-slate-100">
             <VariableProximity
               label="Learn More"
-              containerRef={containerRef}
-              radius={110}
-              falloff="gaussian"
-              fromFontVariationSettings="'wght' 420, 'opsz' 14"
-              toFontVariationSettings="'wght' 980, 'opsz' 42"
+              className="text-base tracking-[0.01em]"
+              containerRef={linksRef}
+              radius={220}
+              falloff="linear"
+              fromFontVariationSettings="'wght' 320, 'opsz' 12"
+              toFontVariationSettings="'wght' 1000, 'opsz' 44"
             />
           </Link>
         </div>

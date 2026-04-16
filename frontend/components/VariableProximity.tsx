@@ -142,6 +142,8 @@ const VariableProximity = forwardRef<HTMLSpanElement, VariableProximityProps>(fu
       const distance = calculateDistance(mousePositionRef.current.x, mousePositionRef.current.y, letterCenterX, letterCenterY)
       if (distance >= radius) {
         letterRef.style.fontVariationSettings = fromFontVariationSettings
+        letterRef.style.transform = 'scale(1)'
+        letterRef.style.opacity = '1'
         return
       }
 
@@ -154,6 +156,8 @@ const VariableProximity = forwardRef<HTMLSpanElement, VariableProximityProps>(fu
         .join(', ')
 
       letterRef.style.fontVariationSettings = newSettings
+      letterRef.style.transform = `scale(${1 + falloffValue * 0.42})`
+      letterRef.style.opacity = `${0.72 + falloffValue * 0.28}`
     })
   })
 
@@ -181,6 +185,8 @@ const VariableProximity = forwardRef<HTMLSpanElement, VariableProximityProps>(fu
                 style={{
                   display: 'inline-block',
                   fontVariationSettings: interpolatedSettingsRef.current[currentLetterIndex],
+                  transformOrigin: '50% 70%',
+                  willChange: 'transform, font-variation-settings, opacity',
                 }}
                 aria-hidden="true"
               >
