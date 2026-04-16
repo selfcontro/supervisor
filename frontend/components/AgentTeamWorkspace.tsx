@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { type FormEvent, useEffect, useRef, useState } from 'react'
+import DotField from '@/components/DotField'
 import FlowChart from '@/components/FlowChart'
 import { dispatchCodexTask, finishCodexTask } from '@/lib/codexControlApi'
 import { classifySessionSnapshotFailure } from '@/lib/runtimeConfig'
@@ -411,12 +412,19 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
     )
   }
 
+  const rootTasks = tasks
+    .filter((task) => !task.parentTaskId)
+    .sort((left, right) => new Date(right.updatedAt || right.createdAt).getTime() - new Date(left.updatedAt || left.createdAt).getTime())
+    .slice(0, 8)
   const recentTasks = tasks
     .slice()
     .sort((left, right) => new Date(right.updatedAt || right.createdAt).getTime() - new Date(left.updatedAt || left.createdAt).getTime())
     .slice(0, 8)
   const tasksById = new Map(tasks.map((task) => [task.id, task] as const))
-  const rootTasks = recentTasks.filter((task) => !task.parentTaskId)
+  const activeRootTask = tasks
+    .filter((task) => !task.parentTaskId && task.agentId === 'agent-main')
+    .sort((left, right) => new Date(right.updatedAt || right.createdAt).getTime() - new Date(left.updatedAt || left.createdAt).getTime())
+    .find((task) => !['completed', 'rejected', 'failed', 'error', 'interrupted'].includes(task.status)) || null
 
   const statusTone: Record<string, string> = {
     completed: 'bg-emerald-400',
@@ -434,7 +442,7 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
   async function handleSubmitPrompt(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const nextPrompt = prompt.trim()
-    if (!nextPrompt || isSendingPrompt) {
+    if (!nextPrompt || isSendingPrompt || activeRootTask) {
       return
     }
 
@@ -471,7 +479,22 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
 
   return (
     <main className="h-screen w-screen overflow-hidden bg-[#04070d]">
-      <div className="h-full w-full bg-[radial-gradient(circle_at_top,rgba(14,116,144,0.12),transparent_28%),linear-gradient(180deg,#050811_0%,#04070d_48%,#050811_100%)]">
+      <div className="relative h-full w-full bg-[radial-gradient(circle_at_top,rgba(14,116,144,0.08),transparent_30%),linear-gradient(180deg,#050811_0%,#04070d_50%,#050811_100%)]">
+        <div className="pointer-events-none absolute inset-0 z-0 opacity-80">
+          <DotField
+            dotRadius={1.4}
+            dotSpacing={13}
+            bulgeStrength={56}
+            glowRadius={145}
+            sparkle={false}
+            waveAmplitude={0}
+            gradientFrom="rgba(56, 189, 248, 0.22)"
+            gradientTo="rgba(59, 130, 246, 0.16)"
+            glowColor="rgba(10, 22, 38, 0.9)"
+          />
+        </div>
+        <div className="absolute inset-0 z-[1] bg-[radial-gradient(circle_at_50%_12%,rgba(56,189,248,0.09),transparent_34%)]" />
+        <div className="relative z-10 h-full w-full">
         <FlowChart
           agents={agents.map((agent) => ({ ...agent, currentTask: agent.currentTask || undefined }))}
           tasks={tasks}
@@ -479,6 +502,7 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
           selectedAgentId={selectedAgentId}
           onSelectAgent={setSelectedAgentId}
         />
+        </div>
       </div>
       <div className="fixed right-4 top-20 z-20 flex flex-col items-end gap-3">
         <button
@@ -490,7 +514,7 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
         </button>
 
         {taskPanelOpen ? (
-          <aside className="w-[320px] max-w-[calc(100vw-2rem)] rounded-[1.4rem] border border-[rgba(148,163,184,0.14)] bg-[rgba(2,6,23,0.84)] p-3 text-left shadow-[0_24px_80px_-40px_rgba(2,6,23,0.92)] backdrop-blur-xl">
+          <aside className="max-h-[min(70vh,720px)] w-[360px] max-w-[calc(100vw-2rem)] overflow-y-auto rounded-[1.4rem] border border-[rgba(148,163,184,0.14)] bg-[rgba(2,6,23,0.84)] p-3 text-left shadow-[0_24px_80px_-40px_rgba(2,6,23,0.92)] backdrop-blur-xl">
             <div className="mb-3 flex items-center justify-between">
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[rgba(148,163,184,0.72)]">
                 Recent tasks
@@ -522,14 +546,14 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
                       <button
                         type="button"
                         onClick={() => task.agentId && setSelectedAgentId(task.agentId)}
-                        className="flex w-full items-start gap-3 text-left"
+                        className="flex w-full items-start gap-3 overflow-hidden text-left"
                       >
                         <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${statusTone[task.status] || 'bg-slate-500'}`} />
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-medium text-[rgba(241,245,249,0.92)]">
+                          <span className="block break-words text-sm font-medium leading-5 text-[rgba(241,245,249,0.92)] [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden">
                             {task.description}
                           </span>
-                          <span className="mt-1 block text-[11px] uppercase tracking-[0.12em] text-[rgba(148,163,184,0.7)]">
+                          <span className="mt-1 block break-all text-[11px] uppercase tracking-[0.12em] text-[rgba(148,163,184,0.7)]">
                             {task.status}
                             {task.agentId ? ` · ${task.agentId}` : ''}
                           </span>
@@ -543,10 +567,10 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
                               key={stageTask.id}
                               type="button"
                               onClick={() => stageTask.agentId && setSelectedAgentId(stageTask.agentId)}
-                              className="flex w-full items-center gap-2 text-left"
+                              className="flex w-full items-start gap-2 overflow-hidden text-left"
                             >
-                              <span className={`h-2 w-2 shrink-0 rounded-full ${statusTone[stageTask.status] || 'bg-slate-500'}`} />
-                              <span className="truncate text-[12px] text-[rgba(191,219,254,0.84)]">
+                              <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${statusTone[stageTask.status] || 'bg-slate-500'}`} />
+                              <span className="min-w-0 flex-1 break-words text-[12px] leading-5 text-[rgba(191,219,254,0.84)] [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden">
                                 {stageTask.description}
                               </span>
                               <span className="ml-auto shrink-0 text-[10px] uppercase tracking-[0.1em] text-[rgba(148,163,184,0.66)]">
@@ -603,15 +627,20 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
             </p>
             <button
               type="submit"
-              disabled={isSendingPrompt || !prompt.trim()}
-              className="rounded-full border border-[rgba(125,211,252,0.24)] bg-[rgba(8,47,73,0.5)] px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-[rgba(191,219,254,0.92)] transition hover:border-[rgba(125,211,252,0.46)] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {isSendingPrompt ? 'Sending…' : 'Send'}
-            </button>
-          </div>
-          {promptError ? (
-            <p className="mt-2 text-xs text-[rgba(248,113,113,0.86)]">{promptError}</p>
-          ) : null}
+            disabled={isSendingPrompt || !prompt.trim() || Boolean(activeRootTask)}
+            className="rounded-full border border-[rgba(125,211,252,0.24)] bg-[rgba(8,47,73,0.5)] px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-[rgba(191,219,254,0.92)] transition hover:border-[rgba(125,211,252,0.46)] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isSendingPrompt ? 'Sending…' : 'Send'}
+          </button>
+        </div>
+        {activeRootTask ? (
+          <p className="mt-2 text-xs text-[rgba(148,163,184,0.78)]">
+            Current team task in progress: <span className="text-[rgba(241,245,249,0.92)]">{activeRootTask.description}</span>
+          </p>
+        ) : null}
+        {promptError ? (
+          <p className="mt-2 text-xs text-[rgba(248,113,113,0.86)]">{promptError}</p>
+        ) : null}
         </form>
       </div>
     </main>
