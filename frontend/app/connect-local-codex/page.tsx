@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { buildBridgeGuide } from '@/lib/bridgeGuide'
+import { getConnectCopy } from '@/lib/connectContent'
 import { summarizeHealthPayload } from '@/lib/connectDiagnostics'
 import { shouldAutoEnterWorkspace } from '@/lib/connectFlow'
 import {
@@ -24,6 +25,7 @@ interface DiagnosticCheck {
 type HealthState =
   | { status: 'idle' }
   | { status: 'checking' }
+  | { status: 'redirecting'; details: string; checks: Record<string, DiagnosticCheck> }
   | { status: 'ok'; details: string; checks: Record<string, DiagnosticCheck> }
   | { status: 'error'; details: string; checks?: Record<string, DiagnosticCheck> }
 
@@ -44,6 +46,7 @@ function normalizeInput(value: string) {
 
 export default function ConnectLocalCodexPage() {
   const router = useRouter()
+  const copy = getConnectCopy()
   const [endpoint, setEndpoint] = useState(DEFAULT_LOCAL_ENDPOINT)
   const [savedEndpoint, setSavedEndpoint] = useState<string | null>(null)
   const [health, setHealth] = useState<HealthState>({ status: 'idle' })
@@ -59,10 +62,10 @@ export default function ConnectLocalCodexPage() {
 
   async function checkEndpoint(nextEndpoint = endpoint) {
     const normalized = normalizeInput(nextEndpoint)
-    if (!normalized) {
+        if (!normalized) {
       setHealth({
         status: 'error',
-        details: 'Enter a local backend URL first.',
+        details: 'Enter a local bridge URL first.',
       })
       return
     }
@@ -89,22 +92,29 @@ export default function ConnectLocalCodexPage() {
         ...summary.checks,
         websocket: websocketStatus,
       }
-      setHealth({
-        status: 'ok',
-        details: `本地 bridge 已连接。Codex 控制状态：${payload?.codexControl || 'unknown'}。`,
-        checks: nextChecks,
-      })
       if (shouldAutoEnterWorkspace(nextChecks)) {
         saveBrowserBackendOverride(window, normalized)
         setSavedEndpoint(normalized)
+        setHealth({
+          status: 'redirecting',
+          details: copy.redirecting,
+          checks: nextChecks,
+        })
         window.setTimeout(() => {
           router.push('/workspace/default')
         }, 500)
+        return
       }
+
+      setHealth({
+        status: 'ok',
+        details: `Local bridge reachable. Codex control: ${payload?.codexControl || 'unknown'}.`,
+        checks: nextChecks,
+      })
     } catch (error) {
       setHealth({
         status: 'error',
-        details: error instanceof Error ? error.message : '无法连接本地 bridge。',
+        details: error instanceof Error ? error.message : 'Unable to reach the local bridge.',
       })
     }
   }
@@ -114,7 +124,7 @@ export default function ConnectLocalCodexPage() {
     if (!normalized) {
       setHealth({
         status: 'error',
-        details: '请先输入有效的本地地址。',
+        details: 'Enter a valid local bridge URL before saving.',
       })
       return
     }
@@ -124,7 +134,7 @@ export default function ConnectLocalCodexPage() {
     setEndpoint(persisted || DEFAULT_LOCAL_ENDPOINT)
     setHealth({
       status: 'ok',
-      details: '已保存。当前浏览器会使用这个本地 bridge 地址。',
+      details: 'Saved. This browser will use the local bridge endpoint.',
       checks: {},
     })
   }
@@ -143,16 +153,16 @@ export default function ConnectLocalCodexPage() {
     <main className="min-h-screen bg-[#04070d] px-6 py-12 text-[#e2e8f0]">
       <div className="mx-auto flex max-w-5xl flex-col gap-8">
         <div className="space-y-3">
-          <p className="text-xs uppercase tracking-[0.28em] text-[rgba(103,232,249,0.72)]">连接本地 Codex</p>
-          <h1 className="text-4xl font-semibold tracking-[-0.03em] text-white">从 Vercel 前端接入你自己的本地 Codex 运行时</h1>
+          <p className="text-xs uppercase tracking-[0.28em] text-[rgba(103,232,249,0.72)]">{copy.badge}</p>
+          <h1 className="text-4xl font-semibold tracking-[-0.03em] text-white">{copy.title}</h1>
           <p className="max-w-3xl text-sm leading-7 text-[rgba(148,163,184,0.84)]">
-            这个公开站点只负责界面。你的任务、session 和 Codex harness 应该运行在你自己的机器上，通过本地 backend 或 bridge 提供给网页使用。
+            {copy.description}
           </p>
         </div>
 
         <section className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
           <div className="rounded-[32px] border border-[rgba(125,211,252,0.14)] bg-[rgba(8,15,28,0.88)] p-7 shadow-[0_28px_120px_rgba(2,8,23,0.45)]">
-            <label className="block text-xs uppercase tracking-[0.24em] text-[rgba(148,163,184,0.72)]">本地 Bridge 地址</label>
+            <label className="block text-xs uppercase tracking-[0.24em] text-[rgba(148,163,184,0.72)]">{copy.endpointLabel}</label>
             <input
               value={endpoint}
               onChange={(event) => setEndpoint(event.target.value)}
@@ -160,7 +170,7 @@ export default function ConnectLocalCodexPage() {
               className="mt-4 w-full rounded-2xl border border-[rgba(148,163,184,0.14)] bg-[rgba(2,6,23,0.82)] px-4 py-3 text-sm text-white outline-none transition focus:border-[rgba(103,232,249,0.55)]"
             />
             <p className="mt-3 text-xs leading-6 text-[rgba(148,163,184,0.76)]">
-              示例：<span className="text-white">http://127.0.0.1:3001</span>
+              {copy.endpointExample} <span className="text-white">http://127.0.0.1:3001</span>
             </p>
 
             <div className="mt-6 flex flex-wrap gap-3">
@@ -168,32 +178,44 @@ export default function ConnectLocalCodexPage() {
                 onClick={() => void checkEndpoint()}
                 className="rounded-full bg-[rgba(8,145,178,0.18)] px-5 py-2.5 text-sm text-cyan-100 transition hover:bg-[rgba(8,145,178,0.28)]"
               >
-                检测连接
+                {copy.primaryAction}
               </button>
               <button
                 onClick={saveEndpoint}
                 className="rounded-full bg-[#e2e8f0] px-5 py-2.5 text-sm text-[#020617] transition hover:bg-white"
               >
-                保存地址
+                {copy.saveAction}
               </button>
               <button
                 onClick={resetEndpoint}
                 className="rounded-full border border-[rgba(148,163,184,0.18)] px-5 py-2.5 text-sm text-[rgba(226,232,240,0.82)] transition hover:border-[rgba(148,163,184,0.34)] hover:text-white"
               >
-                重置
+                {copy.resetAction}
               </button>
             </div>
 
             <div className="mt-5 rounded-2xl border border-[rgba(148,163,184,0.12)] bg-[rgba(2,6,23,0.68)] px-4 py-4 text-sm leading-7">
               {health.status === 'idle' ? (
-                <p className="text-[rgba(148,163,184,0.76)]">还没有执行连接检测。</p>
+                <p className="text-[rgba(148,163,184,0.76)]">{copy.idle}</p>
               ) : null}
               {health.status === 'checking' ? (
-                <p className="text-[rgba(125,211,252,0.9)]">正在检测本地 bridge 状态...</p>
+                <p className="text-[rgba(125,211,252,0.9)]">{copy.checking}</p>
               ) : null}
               {health.status === 'ok' ? (
                 <div className="space-y-4">
                   <p className="text-[rgba(134,239,172,0.9)]">{health.details}</p>
+                  {Object.entries(health.checks).length > 0 ? (
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {Object.entries(health.checks).map(([key, check]) => (
+                        <DiagnosticTile key={key} check={check} />
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {health.status === 'redirecting' ? (
+                <div className="space-y-4">
+                  <p className="text-[rgba(125,211,252,0.92)]">{health.details}</p>
                   {Object.entries(health.checks).length > 0 ? (
                     <div className="grid gap-3 md:grid-cols-2">
                       {Object.entries(health.checks).map(([key, check]) => (
@@ -219,12 +241,12 @@ export default function ConnectLocalCodexPage() {
           </div>
 
           <aside className="rounded-[32px] border border-[rgba(148,163,184,0.12)] bg-[rgba(7,10,19,0.92)] p-7">
-            <p className="text-xs uppercase tracking-[0.24em] text-[rgba(148,163,184,0.68)]">快速开始</p>
+            <p className="text-xs uppercase tracking-[0.24em] text-[rgba(148,163,184,0.68)]">{copy.quickStart}</p>
             <ol className="mt-4 space-y-3 text-sm leading-7 text-[rgba(226,232,240,0.82)]">
-              <li>1. 在这个仓库里启动本地 Codex bridge。</li>
-              <li>2. 确认它暴露 `/health`、`/api/sessions/:id` 和 `WS /ws`。</li>
-              <li>3. 在这里检测地址。</li>
-              <li>4. 保存后进入工作台。</li>
+              <li>1. Start the local Codex bridge from this repository.</li>
+              <li>2. Make sure it exposes `/health`, `/api/sessions/:id`, and `WS /ws`.</li>
+              <li>3. Test the endpoint here.</li>
+              <li>4. Save it and continue into the workspace.</li>
             </ol>
             <div className="mt-6 rounded-2xl border border-[rgba(148,163,184,0.1)] bg-[rgba(2,6,23,0.72)] px-4 py-4 font-mono text-xs leading-6 text-[rgba(148,163,184,0.88)]">
               {guide.startCommand}
@@ -233,7 +255,7 @@ export default function ConnectLocalCodexPage() {
               {guide.verifyCommand}
             </div>
             <div className="mt-6 rounded-2xl border border-[rgba(148,163,184,0.1)] bg-[rgba(2,6,23,0.72)] px-4 py-4 font-mono text-xs leading-6 text-[rgba(148,163,184,0.88)]">
-              {savedEndpoint ? `已保存地址：\n${savedEndpoint}` : '当前浏览器还没有保存 bridge 地址。'}
+              {savedEndpoint ? `${copy.savedEndpointPrefix}\n${savedEndpoint}` : copy.emptySavedEndpoint}
             </div>
             <div className="mt-4 rounded-2xl border border-[rgba(148,163,184,0.1)] bg-[rgba(2,6,23,0.72)] px-4 py-4 font-mono text-xs leading-6 text-[rgba(148,163,184,0.88)]">
               {guide.healthUrl}
@@ -247,13 +269,13 @@ export default function ConnectLocalCodexPage() {
                 href="/workspace/default"
                 className="rounded-full bg-[rgba(103,232,249,0.14)] px-5 py-2.5 text-sm text-cyan-100 transition hover:bg-[rgba(103,232,249,0.24)]"
               >
-                进入工作台
+                {copy.workspaceAction}
               </Link>
               <Link
                 href="/"
                 className="rounded-full border border-[rgba(148,163,184,0.16)] px-5 py-2.5 text-sm text-[rgba(226,232,240,0.82)] transition hover:border-[rgba(148,163,184,0.32)] hover:text-white"
               >
-                返回首页
+                {copy.homeAction}
               </Link>
             </div>
           </aside>
@@ -292,7 +314,7 @@ function probeWebSocket(url: string): Promise<DiagnosticCheck> {
         resolve({
           label: 'WebSocket endpoint',
           status: 'pending',
-          detail: 'WebSocket 检测超时，连接没有在预期时间内建立。',
+          detail: 'WebSocket probe timed out before the connection opened.',
           url,
         })
       }, 2500)
@@ -303,7 +325,7 @@ function probeWebSocket(url: string): Promise<DiagnosticCheck> {
         resolve({
           label: 'WebSocket endpoint',
           status: 'ok',
-          detail: 'WebSocket 握手成功。',
+          detail: 'WebSocket handshake succeeded.',
           url,
         })
       }
@@ -313,7 +335,7 @@ function probeWebSocket(url: string): Promise<DiagnosticCheck> {
         resolve({
           label: 'WebSocket endpoint',
           status: 'error',
-          detail: 'WebSocket 握手失败。',
+          detail: 'WebSocket handshake failed.',
           url,
         })
       }
@@ -321,7 +343,7 @@ function probeWebSocket(url: string): Promise<DiagnosticCheck> {
       resolve({
         label: 'WebSocket endpoint',
         status: 'error',
-        detail: '当前浏览器无法启动 WebSocket 检测。',
+        detail: 'This browser could not start the WebSocket probe.',
         url,
       })
     }
