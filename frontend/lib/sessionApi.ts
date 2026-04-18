@@ -1,4 +1,4 @@
-import { apiUrl, wsUrl } from '@/src/constants/agent'
+import { resolveBrowserApiUrl, resolveBrowserWsUrl } from '@/lib/runtimeConfig'
 import type { SessionSnapshot, SessionSummary, SessionTask } from '@/src/types/session'
 
 export class SessionApiError extends Error {
@@ -14,7 +14,7 @@ export class SessionApiError extends Error {
 }
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${apiUrl}${path}`, {
+  const response = await fetch(`${resolveBrowserApiUrl()}${path}`, {
     cache: 'no-store',
     ...init,
     headers: {
@@ -74,7 +74,7 @@ export async function assignTaskToAgent(sessionId: string, agentId: string, task
 }
 
 export function getWorkspaceSocketUrl(): string {
-  return `${wsUrl}/ws`
+  return `${resolveBrowserWsUrl()}/ws`
 }
 
 export function subscribeToSession(socket: WebSocket, sessionId: string) {

@@ -110,6 +110,11 @@ function createServer(options = {}) {
 
   app.get('/health', (req, res) => {
     const apiKeyConfigured = Boolean(process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY)
+    const address = server.address()
+    const effectivePort = typeof address === 'object' && address ? address.port : port
+    const effectiveHost = host === '0.0.0.0' ? '127.0.0.1' : host
+    const wsUrl = `ws://${effectiveHost}:${effectivePort}/ws`
+    const httpUrl = `http://${effectiveHost}:${effectivePort}`
     res.json({
       status: 'ok',
       timestamp: new Date().toISOString(),
@@ -118,7 +123,28 @@ function createServer(options = {}) {
       codexControl: codexOrchestrator.started ? 'ready' : 'starting',
       codexApiKeyConfigured: apiKeyConfigured,
       codexBin: process.env.CODEX_BIN || 'codex',
-      uptime: process.uptime()
+      uptime: process.uptime(),
+      bridge: {
+        kind: 'local_codex_bridge',
+        transport: {
+          http: httpUrl,
+          ws: wsUrl
+        },
+        capabilities: {
+          sessions: true,
+          codexControl: true,
+          realtime: true,
+          approvals: true,
+          commandLogs: true
+        },
+        auth: {
+          configured: apiKeyConfigured
+        },
+        runtime: {
+          codexControl: codexOrchestrator.started ? 'ready' : 'starting',
+          codexBin: process.env.CODEX_BIN || 'codex'
+        }
+      }
     })
   })
 

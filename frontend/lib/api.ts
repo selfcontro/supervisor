@@ -1,6 +1,4 @@
-import { apiUrl } from '@/src/constants/agent'
-
-const API_BASE = apiUrl
+import { resolveBrowserApiUrl } from '@/lib/runtimeConfig'
 
 export interface Agent {
   id: string
@@ -17,12 +15,12 @@ export interface Task {
 }
 
 export async function getAgents(): Promise<Agent[]> {
-  const res = await fetch(`${API_BASE}/api/agents`)
+  const res = await fetch(`${resolveBrowserApiUrl()}/api/agents`)
   return res.json()
 }
 
 export async function createTask(description: string): Promise<Task> {
-  const res = await fetch(`${API_BASE}/api/tasks`, {
+  const res = await fetch(`${resolveBrowserApiUrl()}/api/tasks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ description }),
@@ -31,7 +29,7 @@ export async function createTask(description: string): Promise<Task> {
 }
 
 export async function assignTask(agentId: string, task: string): Promise<void> {
-  await fetch(`${API_BASE}/api/agents/${agentId}/task`, {
+  await fetch(`${resolveBrowserApiUrl()}/api/agents/${agentId}/task`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ task }),
@@ -39,7 +37,7 @@ export async function assignTask(agentId: string, task: string): Promise<void> {
 }
 
 export async function codexChat(messages: any[]): Promise<string> {
-  const res = await fetch(`${API_BASE}/api/codex/chat`, {
+  const res = await fetch(`${resolveBrowserApiUrl()}/api/codex/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ messages }),

@@ -67,6 +67,26 @@ npm start
 
 Backend listens on `http://127.0.0.1:3001`.
 
+### Start local bridge for the Vercel frontend
+
+```bash
+cd backend
+npm run bridge
+```
+
+Expected local bridge checks:
+
+```bash
+curl http://127.0.0.1:3001/health
+curl http://127.0.0.1:3001/api/sessions/default
+```
+
+The bridge also exposes:
+
+```text
+ws://127.0.0.1:3001/ws
+```
+
 ### Start frontend
 
 ```bash
@@ -81,6 +101,14 @@ Open:
 ```text
 http://127.0.0.1:3000/workspace/default
 ```
+
+Public frontend flow:
+
+- Deploy `frontend` to Vercel
+- Open `/connect-local-codex`
+- Start the local bridge with `cd backend && npm run bridge`
+- Save `http://127.0.0.1:3001` as the browser endpoint override
+- Open `/workspace/default`
 
 ## Main Routes
 

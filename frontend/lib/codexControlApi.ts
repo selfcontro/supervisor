@@ -1,11 +1,11 @@
-import { apiUrl } from '@/src/constants/agent'
+import { resolveBrowserApiUrl } from '@/lib/runtimeConfig'
 
 interface RequestOptions extends RequestInit {
   parseAsText?: boolean
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const response = await fetch(`${apiUrl}${path}`, {
+  const response = await fetch(`${resolveBrowserApiUrl()}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',

@@ -77,3 +77,30 @@ test('session settings can be updated through the mock backend integration route
   assert.equal(snapshot.settings.compactMode, true)
   assert.equal(snapshot.settings.reviewMode, 'strict')
 })
+
+test('health endpoint exposes local bridge contract details', async (t) => {
+  const runtime = createServer({ port: 0, host: '127.0.0.1', startProcessing: false })
+
+  t.after(async () => {
+    await runtime.stop().catch(() => {})
+  })
+
+  await runtime.start()
+
+  const address = runtime.server.address()
+  const baseUrl = `http://127.0.0.1:${address.port}`
+
+  const res = await fetch(`${baseUrl}/health`)
+  assert.equal(res.status, 200)
+
+  const payload = await res.json()
+  assert.equal(payload.status, 'ok')
+  assert.equal(payload.bridge.kind, 'local_codex_bridge')
+  assert.equal(payload.bridge.transport.http, baseUrl)
+  assert.equal(payload.bridge.transport.ws, `ws://127.0.0.1:${address.port}/ws`)
+  assert.equal(payload.bridge.capabilities.sessions, true)
+  assert.equal(payload.bridge.capabilities.codexControl, true)
+  assert.equal(payload.bridge.capabilities.realtime, true)
+  assert.equal(typeof payload.bridge.auth.configured, 'boolean')
+  assert.equal(typeof payload.bridge.runtime.codexControl, 'string')
+})

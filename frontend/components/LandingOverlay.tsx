@@ -26,7 +26,7 @@ export default function LandingOverlay() {
           A minimal control surface for orchestrating Codex-backed agent workflows in real time.
         </p>
         <div ref={linksRef} className="mt-7 flex items-center justify-center gap-8">
-          <Link href="/workspace/default" className="text-cyan-200">
+          <Link href="/connect-local-codex" className="text-cyan-200">
             <VariableProximity
               label="Get Start"
               className="text-base tracking-[0.01em]"
