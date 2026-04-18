@@ -4,12 +4,12 @@ const assert = require('node:assert/strict')
 const { buildBridgeGuide } = require('./bridgeGuide')
 
 test('buildBridgeGuide returns startup commands and verification paths for a local endpoint', () => {
-  const guide = buildBridgeGuide('http://127.0.0.1:3001')
+  const guide = buildBridgeGuide('http://127.0.0.1:3101')
 
-  assert.equal(guide.endpoint, 'http://127.0.0.1:3001')
-  assert.equal(guide.healthUrl, 'http://127.0.0.1:3001/health')
-  assert.equal(guide.sessionUrl, 'http://127.0.0.1:3001/api/sessions/default')
-  assert.equal(guide.wsUrl, 'ws://127.0.0.1:3001/ws')
+  assert.equal(guide.endpoint, 'http://127.0.0.1:3101')
+  assert.equal(guide.healthUrl, 'http://127.0.0.1:3101/health')
+  assert.equal(guide.sessionUrl, 'http://127.0.0.1:3101/api/sessions/default')
+  assert.equal(guide.wsUrl, 'ws://127.0.0.1:3101/ws')
   assert.match(guide.startCommand, /npm run bridge/)
 })
 

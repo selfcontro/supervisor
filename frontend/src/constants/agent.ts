@@ -27,7 +27,7 @@ function normalizeConfiguredUrl(value: string) {
 const configuredApiUrl =
   process.env.NEXT_PUBLIC_API_URL ||
   process.env.NEXT_PUBLIC_API_BASE ||
-  'http://localhost:3001'
+  'http://127.0.0.1:3101'
 
 const derivedWsUrl = configuredApiUrl.startsWith('https://')
   ? `wss://${configuredApiUrl.slice('https://'.length)}`
@@ -35,7 +35,7 @@ const derivedWsUrl = configuredApiUrl.startsWith('https://')
     ? `ws://${configuredApiUrl.slice('http://'.length)}`
     : configuredApiUrl
 
-const configuredWsUrl = process.env.NEXT_PUBLIC_WS_URL || derivedWsUrl || 'ws://localhost:3001'
+const configuredWsUrl = process.env.NEXT_PUBLIC_WS_URL || derivedWsUrl || 'ws://127.0.0.1:3101'
 
 export const apiUrl = normalizeConfiguredUrl(configuredApiUrl)
 export const wsUrl = normalizeConfiguredUrl(configuredWsUrl)

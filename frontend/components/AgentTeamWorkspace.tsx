@@ -409,15 +409,15 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
             <div className="mx-auto mt-6 max-w-2xl rounded-[28px] border border-[rgba(125,211,252,0.16)] bg-[rgba(8,15,28,0.9)] p-6 text-left shadow-[0_28px_120px_rgba(2,8,23,0.45)]">
               <p className="text-xs uppercase tracking-[0.24em] text-[rgba(103,232,249,0.7)]">Public Frontend Mode</p>
               <ol className="mt-4 space-y-3 text-sm leading-7 text-[rgba(226,232,240,0.84)]">
-                <li>1. Run your local Codex backend or bridge on <span className="text-white">port 3001</span>.</li>
+                <li>1. Run your local Codex backend or bridge on <span className="text-white">port 3101</span>.</li>
                 <li>2. Make sure it exposes the session API and websocket endpoints used by this workspace.</li>
                 <li>3. If you are using your own local Codex bridge, point this frontend to that URL instead of <span className="text-white">localhost</span>.</li>
                 <li>4. Reload this page after the local runtime reports healthy.</li>
               </ol>
               <div className="mt-5 rounded-2xl border border-[rgba(148,163,184,0.14)] bg-[rgba(2,6,23,0.66)] px-4 py-3 font-mono text-xs leading-6 text-[rgba(148,163,184,0.9)]">
-                NEXT_PUBLIC_API_URL=http://127.0.0.1:3001
+                NEXT_PUBLIC_API_URL=http://127.0.0.1:3101
                 <br />
-                NEXT_PUBLIC_WS_URL=ws://127.0.0.1:3001
+                NEXT_PUBLIC_WS_URL=ws://127.0.0.1:3101
               </div>
               <div className="mt-5 flex items-center justify-center">
                 <Link

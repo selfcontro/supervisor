@@ -29,7 +29,7 @@ type HealthState =
   | { status: 'ok'; details: string; checks: Record<string, DiagnosticCheck> }
   | { status: 'error'; details: string; checks?: Record<string, DiagnosticCheck> }
 
-const DEFAULT_LOCAL_ENDPOINT = 'http://127.0.0.1:3001'
+const DEFAULT_LOCAL_ENDPOINT = 'http://127.0.0.1:3101'
 
 function normalizeInput(value: string) {
   const trimmed = value.trim().replace(/\/+$/, '')
@@ -170,7 +170,7 @@ export default function ConnectLocalCodexPage() {
               className="mt-4 w-full rounded-2xl border border-[rgba(148,163,184,0.14)] bg-[rgba(2,6,23,0.82)] px-4 py-3 text-sm text-white outline-none transition focus:border-[rgba(103,232,249,0.55)]"
             />
             <p className="mt-3 text-xs leading-6 text-[rgba(148,163,184,0.76)]">
-              {copy.endpointExample} <span className="text-white">http://127.0.0.1:3001</span>
+              {copy.endpointExample} <span className="text-white">http://127.0.0.1:3101</span>
             </p>
 
             <div className="mt-6 flex flex-wrap gap-3">

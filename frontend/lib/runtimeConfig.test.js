@@ -16,7 +16,7 @@ const {
 test('resolveApiUrl prefers NEXT_PUBLIC_API_URL when provided', () => {
   const apiUrl = resolveApiUrl({
     NEXT_PUBLIC_API_URL: 'http://127.0.0.1:4001/',
-    NEXT_PUBLIC_API_BASE: 'http://127.0.0.1:3001/',
+    NEXT_PUBLIC_API_BASE: 'http://127.0.0.1:3101/',
   })
 
   assert.equal(apiUrl, 'http://127.0.0.1:4001')
@@ -24,10 +24,10 @@ test('resolveApiUrl prefers NEXT_PUBLIC_API_URL when provided', () => {
 
 test('resolveApiUrl falls back to NEXT_PUBLIC_API_BASE for backward compatibility', () => {
   const apiUrl = resolveApiUrl({
-    NEXT_PUBLIC_API_BASE: 'http://127.0.0.1:3001/',
+    NEXT_PUBLIC_API_BASE: 'http://127.0.0.1:3101/',
   })
 
-  assert.equal(apiUrl, 'http://127.0.0.1:3001')
+  assert.equal(apiUrl, 'http://127.0.0.1:3101')
 })
 
 test('resolveWsUrl derives from api url when explicit websocket url is missing', () => {
@@ -62,7 +62,7 @@ test('classifyWorkspaceLoadFailure marks failed fetches against localhost as loc
       message: 'Failed to fetch',
     },
     {
-      NEXT_PUBLIC_API_URL: 'http://127.0.0.1:3001',
+      NEXT_PUBLIC_API_URL: 'http://127.0.0.1:3101',
     }
   )
 
@@ -109,7 +109,7 @@ test('resolveBrowserWsUrl derives websocket url from saved browser override', ()
     {
       localStorage,
     },
-    'http://localhost:3001/'
+    'http://127.0.0.1:3101/'
   )
 
   const wsUrl = resolveBrowserWsUrl(
@@ -121,7 +121,7 @@ test('resolveBrowserWsUrl derives websocket url from saved browser override', ()
     }
   )
 
-  assert.equal(wsUrl, 'ws://localhost:3001')
+  assert.equal(wsUrl, 'ws://127.0.0.1:3101')
 })
 
 test('clearBrowserBackendOverride removes persisted override', () => {

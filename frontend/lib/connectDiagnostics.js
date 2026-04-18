@@ -1,6 +1,6 @@
 function deriveWebSocketUrl(endpoint) {
   if (typeof endpoint !== 'string') {
-    return 'ws://localhost:3001/ws'
+    return 'ws://127.0.0.1:3101/ws'
   }
 
   const normalized = endpoint.replace(/\/+$/, '')

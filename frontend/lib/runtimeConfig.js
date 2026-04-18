@@ -19,7 +19,7 @@ function resolveApiUrl(env = process.env) {
     return legacyUrl
   }
 
-  return 'http://localhost:3001'
+  return 'http://127.0.0.1:3101'
 }
 
 function resolveWsUrl(env = process.env) {
@@ -41,7 +41,7 @@ function resolveWsUrl(env = process.env) {
     return apiUrl
   }
 
-  return 'ws://localhost:3001'
+  return 'ws://127.0.0.1:3101'
 }
 
 function normalizeOverrideValue(value) {

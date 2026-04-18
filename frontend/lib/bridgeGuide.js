@@ -1,11 +1,11 @@
 function normalizeEndpoint(value) {
   if (typeof value !== 'string') {
-    return 'http://127.0.0.1:3001'
+    return 'http://127.0.0.1:3101'
   }
 
   const trimmed = value.trim().replace(/\/+$/, '')
   if (!trimmed) {
-    return 'http://127.0.0.1:3001'
+    return 'http://127.0.0.1:3101'
   }
 
   if (/^https?:\/\//i.test(trimmed)) {
