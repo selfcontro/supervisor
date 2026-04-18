@@ -2,6 +2,7 @@ const { AgentManager } = require('./agentManager')
 
 const DEFAULT_SESSION_ID = 'default'
 const MAX_LOGS_PER_SESSION = 500
+const VALID_REVIEW_MODES = new Set(['balanced', 'strict'])
 
 class SessionStore {
   constructor() {
@@ -33,6 +34,7 @@ class SessionStore {
         updatedAt: createdAt,
         tasks: new Map(),
         persistedAgents: new Map(),
+        settings: createDefaultSettings(createdAt),
         logs: [],
         agentManager: new AgentManager((event) => {
           this.handleAgentManagerEvent(normalizedSessionId, event)
@@ -367,11 +369,21 @@ class SessionStore {
         createdAt: session.createdAt,
         updatedAt: session.updatedAt
       },
+      settings: cloneSettings(session.settings),
       agents: this.getAgents(session.id),
       workflowAgents: this.getWorkflowAgents(session.id),
       tasks: this.getTasks(session.id),
       logs: this.getLogs(session.id)
     }
+  }
+
+  updateSessionSettings(sessionId, nextSettings = {}) {
+    const session = this.ensureSession(sessionId)
+    const timestamp = new Date().toISOString()
+    session.settings = mergeSessionSettings(session.settings, nextSettings, timestamp)
+    session.updatedAt = timestamp
+
+    return cloneSettings(session.settings)
   }
 
   getSessionIds() {
@@ -382,6 +394,54 @@ class SessionStore {
 module.exports = {
   SessionStore,
   DEFAULT_SESSION_ID
+}
+
+function createDefaultSettings(timestamp = new Date().toISOString()) {
+  return {
+    autoDispatch: true,
+    compactMode: false,
+    reviewMode: 'balanced',
+    backend: {
+      kind: 'mock',
+      status: 'connected',
+      lastSyncedAt: timestamp,
+    },
+  }
+}
+
+function cloneSettings(settings) {
+  return {
+    autoDispatch: Boolean(settings?.autoDispatch),
+    compactMode: Boolean(settings?.compactMode),
+    reviewMode: VALID_REVIEW_MODES.has(settings?.reviewMode) ? settings.reviewMode : 'balanced',
+    backend: {
+      kind: 'mock',
+      status: 'connected',
+      lastSyncedAt: typeof settings?.backend?.lastSyncedAt === 'string'
+        ? settings.backend.lastSyncedAt
+        : new Date().toISOString(),
+    },
+  }
+}
+
+function mergeSessionSettings(existingSettings, patch, timestamp) {
+  const base = cloneSettings(existingSettings || createDefaultSettings(timestamp))
+
+  if (Object.prototype.hasOwnProperty.call(patch, 'autoDispatch')) {
+    base.autoDispatch = Boolean(patch.autoDispatch)
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, 'compactMode')) {
+    base.compactMode = Boolean(patch.compactMode)
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, 'reviewMode') && VALID_REVIEW_MODES.has(patch.reviewMode)) {
+    base.reviewMode = patch.reviewMode
+  }
+
+  base.backend.lastSyncedAt = timestamp
+
+  return base
 }
 
 function normalizeRuntimeAgent(agent) {
@@ -417,6 +477,9 @@ function normalizeRuntimeAgent(agent) {
 function mapRuntimeAgentStatus(state) {
   if (state === 'working') {
     return 'working'
+  }
+  if (state === 'waiting') {
+    return 'waiting'
   }
   if (state === 'error') {
     return 'error'

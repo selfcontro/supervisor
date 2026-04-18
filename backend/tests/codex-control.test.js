@@ -175,28 +175,25 @@ test('captures command execution from notifications', async () => {
   await fs.rm(harness.tmpDir, { recursive: true, force: true })
 })
 
-test('renders a team onboarding checklist card in session blackboard markdown', async () => {
+test('renders swarm duty tasks in session blackboard markdown', async () => {
   const harness = await createHarness()
 
   const dispatch = await harness.orchestrator.dispatchTask('sessionC', 'agent-main', {
     title: 'Tiny onboarding checklist',
-    prompt: 'Create a tiny onboarding checklist card and run it through the agent team.'
+    prompt: 'Create a tiny onboarding checklist card, verify it across frontend and backend surfaces, and run it through the agent team.'
   })
 
   let markdown = await harness.orchestrator.getSessionMarkdown('sessionC')
-  assert.match(markdown, /## Team Checklist Cards/)
-  assert.match(markdown, /### Tiny onboarding checklist/)
-  assert.match(markdown, /- \[ \] Planning/)
-  assert.match(markdown, /- \[ \] Execution/)
-  assert.match(markdown, /- \[ \] Subagent/)
-  assert.match(markdown, /- \[ \] Review/)
+  assert.match(markdown, /# Session Blackboard: sessionC/)
+  assert.match(markdown, /Tiny onboarding checklist/)
+  assert.match(markdown, /task-breakdown/)
 
-  const plannerAgent = getWorkflowAgent(harness.orchestrator.registry, 'sessionC', dispatch.taskId, 'planner')
+  const breakdownAgent = getWorkflowAgent(harness.orchestrator.registry, 'sessionC', dispatch.taskId, 'task-breakdown')
   await harness.orchestrator.handleNotification({
     method: 'turn/completed',
     params: {
-      threadId: plannerAgent.threadId,
-      turnId: plannerAgent.activeTurnId,
+      threadId: breakdownAgent.threadId,
+      turnId: breakdownAgent.activeTurnId,
       turn: {
         outputText: 'Plan ready'
       }
@@ -204,38 +201,30 @@ test('renders a team onboarding checklist card in session blackboard markdown', 
   })
 
   markdown = await harness.orchestrator.getSessionMarkdown('sessionC')
-  assert.match(markdown, /- \[x\] Planning/)
-  assert.match(markdown, /- \[ \] Execution/)
+  assert.match(markdown, /Task Breakdown/)
+  assert.match(markdown, /ui-build|backend-integration|primary-build/)
 
-  const executorAgent = getWorkflowAgent(harness.orchestrator.registry, 'sessionC', dispatch.taskId, 'executor')
-  await harness.orchestrator.handleNotification({
-    method: 'turn/completed',
-    params: {
-      threadId: executorAgent.threadId,
-      turnId: executorAgent.activeTurnId,
-      turn: {
-        outputText: 'Execution done'
+  const workerAgents = harness.orchestrator
+    .listAgents('sessionC')
+    .filter((agent) => agent.workflowParentTaskId === dispatch.taskId && agent.stageId !== 'task-breakdown' && agent.stageId !== 'quality-gate')
+
+  for (const workerAgent of workerAgents) {
+    await harness.orchestrator.handleNotification({
+      method: 'turn/completed',
+      params: {
+        threadId: workerAgent.threadId,
+        turnId: workerAgent.activeTurnId,
+        turn: {
+          outputText: `${workerAgent.stageId} done`
+        }
       }
-    }
-  })
+    })
+  }
 
   markdown = await harness.orchestrator.getSessionMarkdown('sessionC')
-  assert.match(markdown, /- \[x\] Execution/)
-  assert.match(markdown, /- \[ \] Subagent/)
+  assert.match(markdown, /quality-gate/)
 
-  const subagentAgent = getWorkflowAgent(harness.orchestrator.registry, 'sessionC', dispatch.taskId, 'subagent')
-  await harness.orchestrator.handleNotification({
-    method: 'turn/completed',
-    params: {
-      threadId: subagentAgent.threadId,
-      turnId: subagentAgent.activeTurnId,
-      turn: {
-        outputText: 'Subagent done'
-      }
-    }
-  })
-
-  const reviewerAgent = getWorkflowAgent(harness.orchestrator.registry, 'sessionC', dispatch.taskId, 'reviewer')
+  const reviewerAgent = getWorkflowAgent(harness.orchestrator.registry, 'sessionC', dispatch.taskId, 'quality-gate')
   await harness.orchestrator.handleNotification({
     method: 'turn/completed',
     params: {
@@ -248,10 +237,77 @@ test('renders a team onboarding checklist card in session blackboard markdown', 
   })
 
   markdown = await harness.orchestrator.getSessionMarkdown('sessionC')
-  assert.match(markdown, /- \[x\] Planning/)
-  assert.match(markdown, /- \[x\] Execution/)
-  assert.match(markdown, /- \[x\] Subagent/)
-  assert.match(markdown, /- \[x\] Review/)
+  assert.match(markdown, /Review approved/)
+  assert.match(markdown, /quality-gate/)
+
+  await harness.orchestrator.stop()
+  await fs.rm(harness.tmpDir, { recursive: true, force: true })
+})
+
+test('session blackboard checklist cards track modern swarm stage ids', async () => {
+  const harness = await createHarness()
+
+  const dispatch = await harness.orchestrator.dispatchTask('sessionChecklist', 'agent-main', {
+    title: 'Verify long task',
+    prompt: 'Design and verify a long task across frontend and backend surfaces, including UI behavior, backend integration, and validation checks using the agent team.'
+  })
+
+  const breakdownAgent = getWorkflowAgent(harness.orchestrator.registry, 'sessionChecklist', dispatch.taskId, 'task-breakdown')
+  await harness.orchestrator.handleNotification({
+    method: 'turn/completed',
+    params: {
+      threadId: breakdownAgent.threadId,
+      turnId: breakdownAgent.activeTurnId,
+      turn: {
+        outputText: 'Plan ready'
+      }
+    }
+  })
+
+  let markdown = await harness.orchestrator.getSessionMarkdown('sessionChecklist')
+  assert.match(markdown, /Verify long task/)
+  assert.match(markdown, /task-breakdown/)
+  assert.match(markdown, /ui-build|backend-integration|primary-build|validation-sweep/)
+
+  const workerAgents = harness.orchestrator
+    .listAgents('sessionChecklist')
+    .filter((agent) => agent.workflowParentTaskId === dispatch.taskId && agent.stageId !== 'task-breakdown' && agent.stageId !== 'quality-gate')
+
+  for (const workerAgent of workerAgents) {
+    await harness.orchestrator.handleNotification({
+      method: 'turn/completed',
+      params: {
+        threadId: workerAgent.threadId,
+        turnId: workerAgent.activeTurnId,
+        turn: {
+          outputText: `${workerAgent.stageId} done`
+        }
+      }
+    })
+  }
+
+  markdown = await harness.orchestrator.getSessionMarkdown('sessionChecklist')
+  assert.match(markdown, /quality-gate/)
+  assert.match(markdown, /Primary Build|UI Build|Backend Integration|Validation Sweep/)
+
+  markdown = await harness.orchestrator.getSessionMarkdown('sessionChecklist')
+  assert.match(markdown, /quality-gate/)
+  assert.match(markdown, /task_assigned/)
+
+  const reviewerAgent = getWorkflowAgent(harness.orchestrator.registry, 'sessionChecklist', dispatch.taskId, 'quality-gate')
+  await harness.orchestrator.handleNotification({
+    method: 'turn/completed',
+    params: {
+      threadId: reviewerAgent.threadId,
+      turnId: reviewerAgent.activeTurnId,
+      turn: {
+        outputText: 'Review approved'
+      }
+    }
+  })
+
+  markdown = await harness.orchestrator.getSessionMarkdown('sessionChecklist')
+  assert.match(markdown, /Review approved/)
 
   await harness.orchestrator.stop()
   await fs.rm(harness.tmpDir, { recursive: true, force: true })

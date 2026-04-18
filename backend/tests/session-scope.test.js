@@ -101,6 +101,36 @@ test('sessions REST and WebSocket traffic are scoped by sessionId', async (t) =>
     assert.equal(betaTasks.tasks.length, 1)
     assert.equal(betaTasks.tasks[0].description, 'beta task')
 
+    const updateAlphaSettings = await fetch(`${baseUrl}/api/sessions/alpha/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        autoDispatch: false,
+        compactMode: true,
+        reviewMode: 'strict',
+      }),
+    })
+    assert.equal(updateAlphaSettings.status, 200)
+
+    const alphaSettingsBody = await updateAlphaSettings.json()
+    assert.equal(alphaSettingsBody.settings.autoDispatch, false)
+    assert.equal(alphaSettingsBody.settings.compactMode, true)
+    assert.equal(alphaSettingsBody.settings.reviewMode, 'strict')
+
+    const alphaSnapshotWithSettingsRes = await fetch(`${baseUrl}/api/sessions/alpha`)
+    assert.equal(alphaSnapshotWithSettingsRes.status, 200)
+    const alphaSnapshotWithSettings = await alphaSnapshotWithSettingsRes.json()
+    assert.equal(alphaSnapshotWithSettings.settings.autoDispatch, false)
+    assert.equal(alphaSnapshotWithSettings.settings.compactMode, true)
+    assert.equal(alphaSnapshotWithSettings.settings.reviewMode, 'strict')
+
+    const betaSnapshotRes = await fetch(`${baseUrl}/api/sessions/beta`)
+    assert.equal(betaSnapshotRes.status, 200)
+    const betaSnapshot = await betaSnapshotRes.json()
+    assert.equal(betaSnapshot.settings.autoDispatch, true)
+    assert.equal(betaSnapshot.settings.compactMode, false)
+    assert.equal(betaSnapshot.settings.reviewMode, 'balanced')
+
     const missingSessionRes = await fetch(`${baseUrl}/api/sessions/missing-session`)
     assert.equal(missingSessionRes.status, 404)
 

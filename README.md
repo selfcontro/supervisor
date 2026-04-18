@@ -1,79 +1,94 @@
 # Supervisor
 
-Session-scoped control surface for a three-agent team: planner, executor, and reviewer.
+Minimal session-scoped workspace for visualizing and driving a Codex-backed agent workflow.
 
-The repo is split into a Next.js frontend and an Express backend. The frontend provides a dark control-room UI for session navigation, task submission, flow visualization, and live logs. The backend exposes REST and WebSocket endpoints, stores session state, and proxies Codex control operations.
+The project is split into a Next.js frontend and an Express/WebSocket backend. The frontend now focuses on a dark, graph-first workspace. The backend owns session state, task state, websocket broadcasting, and Codex control routes.
 
-## Structure
+## Current Product Shape
 
-- `frontend/`: Next.js 14, React 18, TypeScript, Tailwind CSS, React Flow
-- `backend/`: Express, WebSocket server, session/task routes, Codex control routes
-- `docs/`: PRD and manual test notes
+- Landing page routes users into `/workspace/default`
+- Workspace is intentionally minimal:
+  - full-screen dark `Flow Graph`
+  - in-graph controls (`Reset layout`, zoom, fit view)
+  - compact floating task list
+- Backend sessions are exposed over REST and kept live over WebSocket
+- Codex control endpoints can dispatch team-style tasks through `agent-main`
 
-## What The App Does
+## Repo Structure
 
-- Opens directly into a session-specific workspace at `/workspace/:sessionId`
-- Hydrates the workspace from the session API, then stays live through WebSocket updates
-- Shows the planner, executor, and reviewer pipeline in a single flow graph
-- Lets operators create tasks, inspect logs, switch sessions, and interact with Codex agent controls
+- `frontend/`: Next.js 14, React 18, TypeScript, Tailwind, React Flow
+- `backend/`: Express API, WebSocket server, session/task state, Codex orchestration
+- `docs/`: notes, design docs, manual verification material
 
-## Local Setup
+## Local Development
 
 ### Prerequisites
 
 - Node.js 18+
 - npm
 
-### 1. Install dependencies
+### Install dependencies
 
 ```bash
 cd frontend && npm install
 cd ../backend && npm install
 ```
 
-### 2. Configure environment
+### Environment
 
-Backend uses `backend/.env`:
+Backend: `backend/.env`
 
 ```env
-CODEX_API_KEY=your_api_key_here
+OPENAI_API_KEY=your_api_key_here
+# Optional: custom OpenAI-compatible endpoint. Leave unset for OpenAI default.
+# OPENAI_BASE_URL=https://your-openai-compatible-endpoint/v1
+# Optional aliases (also supported by backend):
+# CODEX_API_KEY=your_api_key_here
+# CODEX_BASE_URL=https://your-openai-compatible-endpoint/v1
+# Optional Codex binary/path control:
+# CODEX_BIN=codex
+# CODEX_CWD=/absolute/path/to/workspace
 PORT=3001
 ```
 
-Frontend uses `frontend/.env.local`:
+Frontend: `frontend/.env.local`
 
 ```env
 NEXT_PUBLIC_API_URL=http://127.0.0.1:3001
 NEXT_PUBLIC_WS_URL=ws://127.0.0.1:3001
 ```
 
-### 3. Start the backend
+### Start backend
 
 ```bash
 cd backend
-npm run dev
+npm start
 ```
 
-Backend listens on `http://localhost:3001`.
+Backend listens on `http://127.0.0.1:3001`.
 
-### 4. Start the frontend
+### Start frontend
 
 ```bash
 cd frontend
 npm run dev
 ```
 
-Frontend listens on `http://localhost:3000`.
+Frontend listens on `http://127.0.0.1:3000`.
 
-Open `http://localhost:3000/workspace/default`.
+Open:
 
-## Key Routes
+```text
+http://127.0.0.1:3000/workspace/default
+```
+
+## Main Routes
 
 ### Frontend
 
-- `/`: landing page
-- `/workspace/default`: default operator workspace
-- `/workspace/:sessionId`: session-scoped control surface
+- `/`
+- `/workspace/default`
+- `/workspace/:sessionId`
 
 ### Backend
 
@@ -81,28 +96,45 @@ Open `http://localhost:3000/workspace/default`.
 - `GET /api/sessions`
 - `GET /api/sessions/:sessionId`
 - `POST /api/tasks`
-- `GET /api/agents`
-- `POST /api/codex-control/*`
+- `POST /api/codex-control/sessions/:sessionId/agents`
+- `POST /api/codex-control/sessions/:sessionId/agents/:agentId/tasks`
+- `POST /api/codex-control/sessions/:sessionId/agents/:agentId/interrupt`
+- `POST /api/codex-control/sessions/:sessionId/agents/:agentId/resume`
+- `POST /api/codex-control/sessions/:sessionId/agents/:agentId/tasks/:taskId/retry`
+- `POST /api/codex-control/sessions/:sessionId/agents/:agentId/close`
 - `WS /ws`
 
 ## Verification
 
-Run the frontend production build:
+Frontend production build:
 
 ```bash
 cd frontend
 npm run build
 ```
 
-Run backend tests:
+Backend tests:
 
 ```bash
 cd backend
 npm test
 ```
 
-Note: the backend currently exposes tests under `backend/tests/`, but `package.json` does not yet define a `test` script. Add one before relying on the command above in CI.
+Single backend test file:
 
-## Runtime Data
+```bash
+cd backend
+node --test tests/codex-session-sync.test.js
+```
 
-The blackboard files under `backend/backend/data/blackboard/sessions/` are runtime session artifacts. They are useful for local inspection, but they should not be treated as durable seeded content for the default session unless the session-level and per-agent views are intentionally kept in sync.
+## Notes
+
+- Runtime blackboard artifacts are stored under `backend/backend/data/blackboard/sessions/`
+- The frontend workspace is intentionally sparse; operational panels from earlier dashboard-style versions have been removed
+- If Next.js dev cache becomes corrupted, the usual recovery is:
+
+```bash
+rm -rf frontend/.next
+cd frontend
+npm run dev
+```

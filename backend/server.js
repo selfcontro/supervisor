@@ -8,6 +8,7 @@ const tasksRouter = require('./routes/tasks')
 const sessionsRouter = require('./routes/sessions')
 const codexRouter = require('./routes/codex')
 const codexControlRouter = require('./routes/codexControl')
+const layoutOverlapVerificationRouter = require('./routes/layoutOverlapVerification')
 const { SessionStore, DEFAULT_SESSION_ID } = require('./services/sessionStore')
 const { CodexRpcClient } = require('./services/codexRpcClient')
 const { AgentRegistry } = require('./services/agentRegistry')
@@ -105,14 +106,18 @@ function createServer(options = {}) {
   app.use('/api/sessions', sessionsRouter)
   app.use('/api/codex', codexRouter)
   app.use('/api/codex-control', codexControlRouter)
+  app.use('/api/layout-overlap-verification', layoutOverlapVerificationRouter)
 
   app.get('/health', (req, res) => {
+    const apiKeyConfigured = Boolean(process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY)
     res.json({
       status: 'ok',
       timestamp: new Date().toISOString(),
       sessions: sessionStore.getSessionIds().length,
       defaultSessionAgents: sessionStore.getAgents(DEFAULT_SESSION_ID).length,
       codexControl: codexOrchestrator.started ? 'ready' : 'starting',
+      codexApiKeyConfigured: apiKeyConfigured,
+      codexBin: process.env.CODEX_BIN || 'codex',
       uptime: process.uptime()
     })
   })

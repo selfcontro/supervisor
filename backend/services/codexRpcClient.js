@@ -8,10 +8,18 @@ class CodexRpcClient extends EventEmitter {
     this.bin = options.bin || process.env.CODEX_BIN || 'codex'
     this.args = Array.isArray(options.args) ? options.args : ['app-server']
     this.cwd = options.cwd || process.env.CODEX_CWD || process.cwd()
-    this.env = {
+    const mergedEnv = {
       ...process.env,
       ...(options.env || {})
     }
+    // Backward-compatible aliases so existing .env files still work.
+    if (!mergedEnv.OPENAI_API_KEY && mergedEnv.CODEX_API_KEY) {
+      mergedEnv.OPENAI_API_KEY = mergedEnv.CODEX_API_KEY
+    }
+    if (!mergedEnv.OPENAI_BASE_URL && mergedEnv.CODEX_BASE_URL) {
+      mergedEnv.OPENAI_BASE_URL = mergedEnv.CODEX_BASE_URL
+    }
+    this.env = mergedEnv
     this.clientInfo = options.clientInfo || {
       name: 'supervisor_backend',
       title: 'Supervisor Backend',

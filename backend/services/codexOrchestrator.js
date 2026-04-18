@@ -118,6 +118,10 @@ class CodexOrchestrator {
     return this.dispatchDirectTask(sessionId, agentId, payload)
   }
 
+  async createTeam(sessionId, payload = {}) {
+    return this.dispatchTeamTask(sessionId, payload)
+  }
+
   async dispatchDirectTask(sessionId, agentId, payload = {}) {
     this.ensureStarted()
     const prompt = typeof payload.prompt === 'string' ? payload.prompt.trim() : ''
@@ -221,6 +225,11 @@ class CodexOrchestrator {
       ? payload.title.trim()
       : prompt.slice(0, 80)
 
+    const existingLiveWorkflowTask = this.findLiveWorkflowTask(sessionId)
+    if (existingLiveWorkflowTask) {
+      throw new Error(`Finish or resolve the current team task first: ${existingLiveWorkflowTask.description || existingLiveWorkflowTask.id}`)
+    }
+
     const coordinator = await this.createOrActivateAgent(sessionId, 'agent-main', {
       harness: payload.harness || {}
     })
@@ -270,14 +279,15 @@ class CodexOrchestrator {
       title,
       prompt,
       priority: parentTask.priority,
-      stages: BASE_WORKFLOW_STAGES,
       stageTaskIds: new Map(),
       stageResults: new Map(),
-      needsSupportStage: null
+      workerStageIds: [],
+      stageDescriptors: new Map(),
+      reviewStarted: false
     }
 
     this.trackWorkflow(workflow, parentTaskId)
-    await this.startWorkflowStage(workflow, 'planner')
+    await this.startWorkflowStage(workflow, BREAKDOWN_STAGE_ID)
 
     return {
       taskId: parentTaskId,
@@ -285,6 +295,19 @@ class CodexOrchestrator {
       threadId: this.registry.getAgent(coordinator.sessionId, coordinator.agentId)?.threadId || null,
       status: 'accepted'
     }
+  }
+
+  findLiveWorkflowTask(sessionId) {
+    const snapshot = this.sessionStore.getSessionSnapshot(sessionId)
+    return (snapshot.tasks || []).find((task) => {
+      if (task.parentTaskId) {
+        return false
+      }
+      if (task.agentId !== 'agent-main') {
+        return false
+      }
+      return !['completed', 'rejected', 'failed', 'error', 'interrupted'].includes(task.status)
+    }) || null
   }
 
   async startWorkflowStage(workflow, stageId) {
@@ -394,12 +417,16 @@ class CodexOrchestrator {
   }
 
   buildStagePrompt(workflow, stageAgentId) {
-    const plan = workflow.stageResults.get('planner') || ''
-    const execution = workflow.stageResults.get('executor') || ''
-    const subagentOutput = workflow.stageResults.get('subagent') || ''
+    const plan = workflow.stageResults.get(BREAKDOWN_STAGE_ID) || ''
+    const workerSummaries = getWorkerStageIds(workflow)
+      .map((stageId) => {
+        const descriptor = getStageDescriptor(stageId, workflow)
+        return `${descriptor.name}\n${workflow.stageResults.get(stageId) || 'No output provided.'}`.trim()
+      })
+      .join('\n\n')
     const descriptor = getStageDescriptor(stageAgentId, workflow)
 
-    if (stageAgentId === 'planner') {
+    if (stageAgentId === BREAKDOWN_STAGE_ID) {
       return [
         `You are ${descriptor.name}. ${descriptor.role}`,
         `Parent task: ${workflow.title}`,
@@ -407,32 +434,20 @@ class CodexOrchestrator {
         'This is a fast orchestration step, not a full design or spec exercise.',
         'Do not read skill documents, do not start brainstorming/spec-writing workflows, and do not scan the whole repository.',
         'Inspect only the minimum context needed, with a hard cap of 3 directly relevant files or commands.',
-        'Return a compact handoff with exactly these sections: Scope, Plan, Risks, Handoff.',
+        'Return a compact handoff with exactly these sections: Scope, Workstreams, Risks, Handoff.',
         'Keep the response under 180 words.'
       ].join('\n\n')
     }
 
-    if (stageAgentId === 'executor') {
+    if (stageAgentId === REVIEW_STAGE_ID) {
       return [
         `You are ${descriptor.name}. ${descriptor.role}`,
         `Parent task: ${workflow.title}`,
         `User request: ${workflow.prompt}`,
-        `Planner output:\n${plan || 'No planner output provided.'}`,
-        'Carry out the implementation or analysis requested.',
-        'Stay focused on the handed-off scope. Do not restart planning or broad repo discovery.',
-        'End with a concise execution summary for the next specialist.'
-      ].join('\n\n')
-    }
-
-    if (stageAgentId === 'subagent') {
-      return [
-        `You are ${descriptor.name}. ${descriptor.role}`,
-        `Parent task: ${workflow.title}`,
-        `User request: ${workflow.prompt}`,
-        `Planner output:\n${plan || 'No planner output provided.'}`,
-        `Executor output:\n${execution || 'No executor output provided.'}`,
-        'Do one focused support pass only. Avoid re-planning the whole task.',
-        'End with a concise handoff summary for the reviewer.'
+        `Task breakdown:\n${plan || 'No breakdown output provided.'}`,
+        `Worker outputs:\n${workerSummaries || 'No worker outputs provided.'}`,
+        'Review the combined work, identify concrete risks, and state whether the result is ready.',
+        'Keep the review concise and decision-oriented.'
       ].join('\n\n')
     }
 
@@ -440,11 +455,9 @@ class CodexOrchestrator {
       `You are ${descriptor.name}. ${descriptor.role}`,
       `Parent task: ${workflow.title}`,
       `User request: ${workflow.prompt}`,
-      `Planner output:\n${plan || 'No planner output provided.'}`,
-      `Executor output:\n${execution || 'No executor output provided.'}`,
-      `Subagent output:\n${subagentOutput || 'No subagent output provided.'}`,
-      'Review the work, identify concrete risks, and state whether the result is ready.',
-      'Keep the review concise and decision-oriented.'
+      `Task breakdown:\n${plan || 'No breakdown output provided.'}`,
+      'Own only this duty. Do not restart planning or broad repository discovery.',
+      'Stay focused on the handed-off workstream and finish with a concise handoff for the coordinator.'
     ].join('\n\n')
   }
 
@@ -462,6 +475,30 @@ class CodexOrchestrator {
     return this.teamWorkflows.get(workflowKey(sessionId, parentTaskId)) || null
   }
 
+  getOrRestoreWorkflow(sessionId, parentTaskId) {
+    const existing = this.teamWorkflows.get(workflowKey(sessionId, parentTaskId))
+    if (existing) {
+      return existing
+    }
+
+    const parentTask = this.sessionStore.getTask(sessionId, parentTaskId)
+    if (!parentTask) {
+      return null
+    }
+
+    const restored = restoreWorkflowFromSessionTask(this.sessionStore, sessionId, parentTask)
+    if (!restored) {
+      return null
+    }
+
+    this.trackWorkflow(restored, restored.parentTaskId)
+    for (const stageTaskId of restored.stageTaskIds.values()) {
+      this.trackWorkflow(restored, stageTaskId)
+    }
+
+    return restored
+  }
+
   async advanceWorkflowOnCompletion(agent, task, result) {
     const workflow = this.getWorkflowForTask(agent.sessionId, task.taskId)
     if (!workflow || task.taskId === workflow.parentTaskId) {
@@ -470,11 +507,25 @@ class CodexOrchestrator {
 
     const stageId = task.stageId || parseStageId(task.taskId)
     workflow.stageResults.set(stageId, result || '')
-    await this.closeWorkflowAgent(workflow, stageId)
-    const nextStageId = this.getNextWorkflowStage(workflow, stageId, result || '')
+    this.markWorkflowAgentWaiting(workflow, stageId)
+    this.refreshWorkflowDescriptor(workflow, stageId)
 
-    if (nextStageId) {
-      await this.startWorkflowStage(workflow, nextStageId)
+    if (stageId === BREAKDOWN_STAGE_ID) {
+      const workerDescriptors = inferWorkerDescriptors(workflow, result || '')
+      workflow.workerStageIds = workerDescriptors.map((descriptor) => descriptor.stageId)
+      for (const descriptor of workerDescriptors) {
+        workflow.stageDescriptors.set(descriptor.stageId, descriptor)
+        await this.startWorkflowStage(workflow, descriptor.stageId)
+      }
+      return
+    }
+
+    if (stageId !== REVIEW_STAGE_ID) {
+      const allWorkersDone = getWorkerStageIds(workflow).every((workerStageId) => workflow.stageResults.has(workerStageId))
+      if (allWorkersDone && !workflow.reviewStarted) {
+        workflow.reviewStarted = true
+        await this.startWorkflowStage(workflow, REVIEW_STAGE_ID)
+      }
       return
     }
 
@@ -483,7 +534,7 @@ class CodexOrchestrator {
       .join('\n\n')
 
     const updatedParentTask = this.registry.updateTask(workflow.sessionId, workflow.parentAgentId, workflow.parentTaskId, {
-      status: 'completed',
+      status: 'awaiting_finish',
       result: parentResult,
       subTasks: getWorkflowSubTaskIds(workflow)
     })
@@ -491,8 +542,72 @@ class CodexOrchestrator {
     if (updatedParentTask) {
       this.syncRuntimeTaskToSession(workflow.sessionId, workflow.parentAgentId, updatedParentTask)
       this.emitTaskUpdate(workflow.sessionId, workflow.parentTaskId, {
-        status: 'completed',
+        status: 'awaiting_finish',
         result: updatedParentTask.result,
+        updatedAt: updatedParentTask.updatedAt,
+        agentId: workflow.parentAgentId
+      })
+    }
+
+    this.registry.updateAgentState(workflow.sessionId, workflow.parentAgentId, 'waiting', null)
+    this.emitAgentStatus(serializeAgent(this.registry.getAgent(workflow.sessionId, workflow.parentAgentId)))
+  }
+
+  markWorkflowAgentWaiting(workflow, stageId) {
+    if (!stageId) {
+      return
+    }
+
+    const agentId = workflowAgentId(workflow.parentTaskId, stageId)
+    const runtimeAgent = this.registry.getAgent(workflow.sessionId, agentId)
+    if (!runtimeAgent || runtimeAgent.state === 'closed') {
+      return
+    }
+
+    this.registry.updateAgentState(workflow.sessionId, agentId, 'waiting', null)
+    this.emitAgentStatus(serializeAgent(this.registry.getAgent(workflow.sessionId, agentId)))
+  }
+
+  async finishTask(sessionId, parentTaskId) {
+    this.ensureStarted()
+    const workflow = this.getOrRestoreWorkflow(sessionId, parentTaskId)
+
+    if (!workflow) {
+      throw new Error('Workflow task not found')
+    }
+
+    const parentTask = this.registry.getTask(workflow.sessionId, workflow.parentAgentId, workflow.parentTaskId)
+      || this.sessionStore.getTask(workflow.sessionId, workflow.parentTaskId)
+    if (!parentTask) {
+      throw new Error('Task not found')
+    }
+
+    if (parentTask.status !== 'awaiting_finish' && parentTask.status !== 'completed') {
+      throw new Error('Task is not ready to finish')
+    }
+
+    await this.closeWorkflowAgents(workflow)
+    this.cleanupWorkflow(workflow)
+
+    const updatedParentRuntimeTask = this.registry.updateTask(workflow.sessionId, workflow.parentAgentId, workflow.parentTaskId, {
+      status: 'completed',
+      subTasks: getWorkflowSubTaskIds(workflow)
+    })
+    const updatedParentTask = updatedParentRuntimeTask || this.sessionStore.syncTask({
+      ...parentTask,
+      id: parentTask.id || workflow.parentTaskId,
+      sessionId: workflow.sessionId,
+      agentId: workflow.parentAgentId,
+      status: 'completed',
+      subTasks: getWorkflowSubTaskIds(workflow)
+    })
+
+    if (updatedParentRuntimeTask) {
+      this.syncRuntimeTaskToSession(workflow.sessionId, workflow.parentAgentId, updatedParentRuntimeTask)
+    }
+    if (updatedParentTask) {
+      this.emitTaskUpdate(workflow.sessionId, workflow.parentTaskId, {
+        status: 'completed',
         updatedAt: updatedParentTask.updatedAt,
         agentId: workflow.parentAgentId
       })
@@ -500,9 +615,40 @@ class CodexOrchestrator {
 
     this.registry.setActiveTask(workflow.sessionId, workflow.parentAgentId, null)
     this.registry.updateAgentState(workflow.sessionId, workflow.parentAgentId, 'idle', null)
-    this.emitAgentStatus(serializeAgent(this.registry.getAgent(workflow.sessionId, workflow.parentAgentId)))
-    await this.closeWorkflowAgents(workflow)
-    this.cleanupWorkflow(workflow)
+    const runtimeParentAgent = this.registry.getAgent(workflow.sessionId, workflow.parentAgentId)
+    if (runtimeParentAgent) {
+      this.emitAgentStatus(serializeAgent(runtimeParentAgent))
+    } else {
+      this.sessionStore.syncAgent(workflow.sessionId, {
+        id: workflow.parentAgentId,
+        name: workflow.parentAgentId,
+        role: getAgentRole(workflow.parentAgentId),
+        status: 'idle',
+        currentTask: null
+      })
+    }
+
+    await this.blackboard.appendEvent({
+      sessionId: workflow.sessionId,
+      agentId: workflow.parentAgentId,
+      threadId: this.registry.getAgent(workflow.sessionId, workflow.parentAgentId)?.threadId,
+      type: 'task_progress',
+      task: {
+        taskId: workflow.parentTaskId,
+        title: workflow.title,
+        status: 'completed',
+        priority: workflow.priority
+      },
+      payload: {
+        action: 'finish'
+      }
+    })
+
+    return {
+      ok: true,
+      taskId: workflow.parentTaskId,
+      status: 'completed'
+    }
   }
 
   async failWorkflow(agent, task, error) {
@@ -536,7 +682,7 @@ class CodexOrchestrator {
   }
 
   async closeWorkflowAgents(workflow) {
-    for (const stageId of ALL_WORKFLOW_STAGES) {
+    for (const stageId of workflow.stageTaskIds.keys()) {
       await this.closeWorkflowAgent(workflow, stageId)
     }
   }
@@ -554,24 +700,6 @@ class CodexOrchestrator {
 
     this.registry.closeAgent(workflow.sessionId, agentId)
     this.emitAgentStatus(serializeAgent(this.registry.getAgent(workflow.sessionId, agentId)))
-  }
-
-  getNextWorkflowStage(workflow, completedStageId, stageResult) {
-    if (completedStageId === 'planner') {
-      return 'executor'
-    }
-
-    if (completedStageId === 'executor') {
-      const needsSupportStage = shouldUseSupportStage(workflow, stageResult)
-      workflow.needsSupportStage = needsSupportStage
-      return needsSupportStage ? 'subagent' : 'reviewer'
-    }
-
-    if (completedStageId === 'subagent') {
-      return 'reviewer'
-    }
-
-    return null
   }
 
   cleanupWorkflow(workflow) {
@@ -1348,10 +1476,20 @@ class CodexOrchestrator {
       turnHistory: Array.isArray(task.turnHistory) ? [...task.turnHistory] : []
     })
   }
+
+  refreshWorkflowDescriptor(workflow, stageId) {
+    if (!workflow?.stageDescriptors || !stageId) {
+      return
+    }
+
+    if (!workflow.stageDescriptors.has(stageId)) {
+      workflow.stageDescriptors.set(stageId, buildDescriptorForStageId(stageId, workflow.prompt))
+    }
+  }
 }
 
 function getWorkflowSubTaskIds(workflow) {
-  return ALL_WORKFLOW_STAGES
+  return getOrderedWorkflowStageIds(workflow)
     .filter((stageId) => workflow.stageTaskIds.has(stageId))
     .map((stageId) => workflow.stageTaskIds.get(stageId))
 }
@@ -1378,26 +1516,38 @@ function workflowTaskKey(sessionId, taskId) {
 }
 
 function humanizeStage(stageId) {
-  if (stageId === 'planner') {
+  if (stageId === BREAKDOWN_STAGE_ID) {
     return 'Task Breakdown'
   }
-  if (stageId === 'executor') {
+  if (stageId === REVIEW_STAGE_ID) {
+    return 'Quality Gate'
+  }
+  if (stageId === 'primary-build') {
     return 'Primary Build'
   }
-  if (stageId === 'subagent') {
-    return 'Focused Support'
+  if (stageId === 'ui-build') {
+    return 'UI Build'
   }
-  if (stageId === 'reviewer') {
-    return 'Quality Gate'
+  if (stageId === 'backend-integration') {
+    return 'Backend Integration'
+  }
+  if (stageId === 'validation-sweep') {
+    return 'Validation Sweep'
+  }
+  if (stageId === 'research-pass') {
+    return 'Research Pass'
+  }
+  if (stageId === 'handoff-notes') {
+    return 'Handoff Notes'
   }
   return stageId
 }
 
 function parentStatusForStage(stageId) {
-  if (stageId === 'planner') {
+  if (stageId === BREAKDOWN_STAGE_ID) {
     return 'planning'
   }
-  if (stageId === 'reviewer') {
+  if (stageId === REVIEW_STAGE_ID) {
     return 'reviewing'
   }
   return 'executing'
@@ -1407,17 +1557,29 @@ function getAgentRole(agentId) {
   if (agentId === 'agent-main') {
     return 'Main coordinator'
   }
-  if (agentId === 'planner') {
+  if (agentId === BREAKDOWN_STAGE_ID) {
     return 'Turns the request into an execution plan and handoff.'
   }
-  if (agentId === 'executor') {
+  if (agentId === REVIEW_STAGE_ID) {
+    return 'Checks correctness, risk, and readiness before handoff.'
+  }
+  if (agentId === 'primary-build') {
     return 'Carries the main implementation or analysis work.'
   }
-  if (agentId === 'subagent') {
-    return 'Provides targeted support work when the task needs a second specialist.'
+  if (agentId === 'ui-build') {
+    return 'Owns the interface workstream and visual execution details.'
   }
-  if (agentId === 'reviewer') {
-    return 'Checks correctness, risk, and readiness before handoff.'
+  if (agentId === 'backend-integration') {
+    return 'Owns backend, API, and integration execution details.'
+  }
+  if (agentId === 'validation-sweep') {
+    return 'Owns focused validation, QA, and regression checks.'
+  }
+  if (agentId === 'research-pass') {
+    return 'Owns focused research, comparisons, and evidence gathering.'
+  }
+  if (agentId === 'handoff-notes') {
+    return 'Owns handoff notes, summaries, and delivery-ready packaging.'
   }
   return 'Codex controlled agent'
 }
@@ -1429,29 +1591,142 @@ function readableAgentName(agentId) {
   return humanizeStage(agentId)
 }
 
-const BASE_WORKFLOW_STAGES = ['planner', 'executor', 'reviewer']
-const ALL_WORKFLOW_STAGES = ['planner', 'executor', 'subagent', 'reviewer']
+const BREAKDOWN_STAGE_ID = 'task-breakdown'
+const REVIEW_STAGE_ID = 'quality-gate'
+
+function getOrderedWorkflowStageIds(workflow) {
+  return [
+    BREAKDOWN_STAGE_ID,
+    ...getWorkerStageIds(workflow),
+    REVIEW_STAGE_ID
+  ]
+}
+
+function getWorkerStageIds(workflow) {
+  return Array.isArray(workflow?.workerStageIds) ? workflow.workerStageIds : []
+}
+
+function buildDescriptorForStageId(stageId, sourceText = '') {
+  if (stageId === BREAKDOWN_STAGE_ID || stageId === REVIEW_STAGE_ID) {
+    return getStageDescriptor(stageId)
+  }
+
+  const normalized = String(stageId || '').trim()
+  if (normalized === 'primary-build') {
+    return {
+      stageId: normalized,
+      name: 'Primary Build',
+      role: 'Owns the main implementation or analysis workstream.'
+    }
+  }
+  if (normalized === 'ui-build') {
+    return {
+      stageId: normalized,
+      name: 'UI Build',
+      role: 'Owns the interface workstream, interaction details, and visual execution.'
+    }
+  }
+  if (normalized === 'backend-integration') {
+    return {
+      stageId: normalized,
+      name: 'Backend Integration',
+      role: 'Owns backend, API, and data integration execution.'
+    }
+  }
+  if (normalized === 'validation-sweep') {
+    return {
+      stageId: normalized,
+      name: 'Validation Sweep',
+      role: 'Owns focused validation, QA, and regression checks.'
+    }
+  }
+  if (normalized === 'research-pass') {
+    return {
+      stageId: normalized,
+      name: 'Research Pass',
+      role: 'Owns focused investigation, evidence gathering, and technical comparison.'
+    }
+  }
+  if (normalized === 'handoff-notes') {
+    return {
+      stageId: normalized,
+      name: 'Handoff Notes',
+      role: 'Owns summaries, delivery notes, and final packaging for handoff.'
+    }
+  }
+
+  return {
+    stageId: normalized,
+    name: humanizeStage(normalized),
+    role: `Owns the ${humanizeStage(normalized).toLowerCase()} workstream for this task. ${sourceText ? `Source focus: ${sourceText}` : ''}`.trim()
+  }
+}
+
+function inferWorkerDescriptors(workflow, breakdownResult = '') {
+  const signalText = `${workflow.prompt}\n${breakdownResult}`.toLowerCase()
+  const descriptors = []
+  const seen = new Set()
+
+  const pushDescriptor = (stageId) => {
+    if (!stageId || seen.has(stageId)) {
+      return
+    }
+    seen.add(stageId)
+    descriptors.push(buildDescriptorForStageId(stageId, workflow.prompt))
+  }
+
+  if (/\b(ui|ux|design|layout|frontend|react|css|visual|screen|page)\b/.test(signalText)) {
+    pushDescriptor('ui-build')
+  }
+
+  if (/\b(api|backend|server|database|schema|query|endpoint|integration|data)\b/.test(signalText)) {
+    pushDescriptor('backend-integration')
+  }
+
+  if (/\b(test|verify|validation|qa|regression|coverage|check)\b/.test(signalText)) {
+    pushDescriptor('validation-sweep')
+  }
+
+  if (/\b(research|compare|investigate|analy[sz]e|benchmark)\b/.test(signalText)) {
+    pushDescriptor('research-pass')
+  }
+
+  if (/\b(doc|copy|write|summary|handoff|notes|changelog)\b/.test(signalText)) {
+    pushDescriptor('handoff-notes')
+  }
+
+  const longTask = /\b(parallel|swarm|multi|across|surface|surfaces|system|end-to-end)\b/.test(signalText)
+    || workflow.prompt.trim().length > 140
+
+  if (descriptors.length === 0) {
+    pushDescriptor('primary-build')
+  }
+
+  if (longTask && descriptors.length === 1) {
+    pushDescriptor('validation-sweep')
+  }
+
+  if (longTask && descriptors.length >= 2 && !seen.has('primary-build') && !seen.has('handoff-notes')) {
+    pushDescriptor('primary-build')
+  }
+
+  return descriptors.slice(0, 4)
+}
 
 function getStageDescriptor(stageId, workflow) {
-  if (stageId === 'planner') {
+  const dynamicDescriptor = workflow?.stageDescriptors instanceof Map ? workflow.stageDescriptors.get(stageId) : null
+  if (dynamicDescriptor) {
+    return dynamicDescriptor
+  }
+
+  if (stageId === BREAKDOWN_STAGE_ID) {
     return {
       name: 'Task Breakdown',
       role: 'Turns the request into an execution plan and handoff.'
     }
   }
 
-  if (stageId === 'executor') {
-    return {
-      name: 'Primary Build',
-      role: 'Carries the main implementation or analysis work.'
-    }
-  }
-
-  if (stageId === 'subagent') {
-    return inferSupportStageDescriptor(workflow)
-  }
-
-  if (stageId === 'reviewer') {
+  if (stageId === REVIEW_STAGE_ID) {
     return {
       name: 'Quality Gate',
       role: 'Checks correctness, risk, and readiness before handoff.'
@@ -1464,59 +1739,55 @@ function getStageDescriptor(stageId, workflow) {
   }
 }
 
-function inferSupportStageDescriptor(workflow) {
-  const supportText = `${workflow.prompt}\n${workflow.stageResults.get('planner') || ''}\n${workflow.stageResults.get('executor') || ''}`.toLowerCase()
+function getWorkflowSummaryStages(workflow) {
+  return getOrderedWorkflowStageIds(workflow).filter((stageId) => workflow.stageResults.has(stageId))
+}
 
-  if (/\b(ui|ux|design|layout|frontend|react|css|visual)\b/.test(supportText)) {
-    return {
-      name: 'UI Support',
-      role: 'Strengthens interface structure, interaction details, and visual polish.'
+function restoreWorkflowFromSessionTask(sessionStore, sessionId, parentTask) {
+  const stageTaskIds = new Map()
+  const stageResults = new Map()
+  const subTaskIds = Array.isArray(parentTask.subTasks) ? parentTask.subTasks : []
+  const stageDescriptors = new Map()
+  const workerStageIds = []
+
+  for (const stageTaskId of subTaskIds) {
+    const stageId = parseStageId(stageTaskId)
+    if (!stageId) {
+      continue
+    }
+
+    const stageTask = sessionStore.getTask(sessionId, stageTaskId)
+    if (!stageTask) {
+      continue
+    }
+
+    stageTaskIds.set(stageId, stageTaskId)
+    if (stageId !== BREAKDOWN_STAGE_ID && stageId !== REVIEW_STAGE_ID) {
+      workerStageIds.push(stageId)
+    }
+    stageDescriptors.set(stageId, buildDescriptorForStageId(stageId, parentTask.description || ''))
+    if (typeof stageTask.result === 'string' && stageTask.result) {
+      stageResults.set(stageId, stageTask.result)
     }
   }
 
-  if (/\b(api|backend|server|database|schema|query|endpoint)\b/.test(supportText)) {
-    return {
-      name: 'Backend Support',
-      role: 'Strengthens backend behavior, data flow, and integration details.'
-    }
-  }
-
-  if (/\b(test|verify|validation|qa|regression|coverage)\b/.test(supportText)) {
-    return {
-      name: 'Verification Support',
-      role: 'Adds focused verification work, edge-case checks, and validation support.'
-    }
-  }
-
-  if (/\b(research|compare|investigate|analy[sz]e|benchmark)\b/.test(supportText)) {
-    return {
-      name: 'Research Support',
-      role: 'Provides focused investigation, comparison, and evidence gathering.'
-    }
-  }
-
-  if (/\b(doc|copy|write|spec|summary|handoff)\b/.test(supportText)) {
-    return {
-      name: 'Documentation Support',
-      role: 'Improves documentation, summaries, and handoff clarity.'
-    }
+  if (stageTaskIds.size === 0) {
+    return null
   }
 
   return {
-    name: 'Focused Support',
-    role: 'Provides targeted support work when the task needs a second specialist.'
+    sessionId,
+    parentTaskId: parentTask.id,
+    parentAgentId: parentTask.agentId || 'agent-main',
+    title: parentTask.description || parentTask.id,
+    prompt: '',
+    priority: parentTask.priority || 'normal',
+    stageTaskIds,
+    stageResults,
+    workerStageIds,
+    stageDescriptors,
+    reviewStarted: stageTaskIds.has(REVIEW_STAGE_ID)
   }
-}
-
-function shouldUseSupportStage(workflow, stageResult = '') {
-  const signalText = `${workflow.prompt}\n${workflow.stageResults.get('planner') || ''}\n${stageResult || ''}`.toLowerCase()
-
-  return /\b(parallel|support|assist|investigate|research|verify|validation|qa|regression|compare|frontend|backend|api|database|ui|ux|refactor|migrate|integrate|handoff)\b/.test(signalText)
-    || workflow.prompt.trim().length > 180
-}
-
-function getWorkflowSummaryStages(workflow) {
-  return ALL_WORKFLOW_STAGES.filter((stageId) => workflow.stageResults.has(stageId))
 }
 
 function extractThreadId(source) {
@@ -1603,6 +1874,10 @@ function trimPreview(value) {
 function mapAgentState(state) {
   if (state === 'working') {
     return 'working'
+  }
+
+  if (state === 'waiting') {
+    return 'waiting'
   }
 
   if (state === 'error') {
