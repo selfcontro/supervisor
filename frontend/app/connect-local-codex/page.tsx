@@ -287,6 +287,12 @@ export default function ConnectLocalCodexPage() {
             </div>
           </aside>
         </section>
+
+        <section className="grid gap-6 lg:grid-cols-3">
+          <InfoPanel title={copy.prerequisitesTitle} items={copy.prerequisites} />
+          <InfoPanel title={copy.authSetupTitle} items={copy.authSetup} />
+          <InfoPanel title={copy.diagnosisTitle} items={copy.diagnosis} />
+        </section>
       </div>
     </main>
   )
@@ -308,6 +314,19 @@ function DiagnosticTile({ check }: { check: DiagnosticCheck }) {
       </div>
       <p className="mt-2 text-xs leading-6">{check.detail}</p>
       {check.url ? <p className="mt-2 font-mono text-[11px] leading-5 opacity-80">{check.url}</p> : null}
+    </div>
+  )
+}
+
+function InfoPanel({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="rounded-[28px] border border-[rgba(148,163,184,0.12)] bg-[rgba(7,10,19,0.92)] p-6">
+      <p className="text-xs uppercase tracking-[0.24em] text-[rgba(148,163,184,0.68)]">{title}</p>
+      <ul className="mt-4 space-y-3 text-sm leading-7 text-[rgba(226,232,240,0.82)]">
+        {items.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
     </div>
   )
 }
