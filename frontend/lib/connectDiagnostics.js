@@ -17,9 +17,14 @@ function deriveWebSocketUrl(endpoint) {
 
 function summarizeHealthPayload(endpoint, payload) {
   const bridgePayload = payload?.bridge || {}
-  const codexRuntimeState = bridgePayload?.runtime?.codexControl || payload?.codexControl
-  const codexReady = codexRuntimeState === 'ready'
-  const authReady = Boolean(bridgePayload?.auth?.configured ?? payload?.codexApiKeyConfigured)
+  const runtimePayload = bridgePayload?.runtime || {}
+  const authPayload = bridgePayload?.auth || {}
+  const codexRuntimeState = runtimePayload?.codexControl || payload?.codexControl
+  const appServerState = runtimePayload?.appServer || (codexRuntimeState === 'ready' ? 'ready' : 'starting')
+  const codexInstalled = Boolean(runtimePayload?.codexInstalled ?? true)
+  const codexReady = codexRuntimeState === 'ready' || appServerState === 'ready'
+  const authReady = Boolean(authPayload?.configured ?? payload?.codexApiKeyConfigured)
+  const authSource = authPayload?.source || (authReady ? 'local auth' : 'missing')
   const sessions = Number.isFinite(payload?.sessions) ? payload.sessions : 0
   const websocketUrl = bridgePayload?.transport?.ws || deriveWebSocketUrl(endpoint)
 
@@ -37,13 +42,19 @@ function summarizeHealthPayload(endpoint, payload) {
     },
     codex: {
       label: 'Codex app-server',
-      status: codexReady ? 'ok' : 'pending',
-      detail: codexReady ? 'Codex control runtime is ready.' : 'Codex control is still starting.',
+      status: codexReady ? 'ok' : codexInstalled ? 'pending' : 'error',
+      detail: codexReady
+        ? 'Codex control runtime is ready.'
+        : codexInstalled
+          ? 'Codex bridge is reachable, but the local app-server is not ready yet.'
+          : 'Codex CLI is not installed or not available on this machine.',
     },
     auth: {
       label: 'Authentication',
       status: authReady ? 'ok' : 'error',
-      detail: authReady ? 'Backend reports an API key or local auth is configured.' : 'No local Codex/OpenAI auth detected yet.',
+      detail: authReady
+        ? `Local auth detected via ${authSource}.`
+        : 'No local Codex/OpenAI auth detected yet.',
     },
     sessions: {
       label: 'Session store',
@@ -58,6 +69,29 @@ function summarizeHealthPayload(endpoint, payload) {
   }
 }
 
+function summarizeConnectFailure(error, endpoint, browser = globalThis?.window) {
+  const message = error instanceof Error ? error.message : 'Unable to reach the local bridge.'
+  const protocol = browser?.location?.protocol || ''
+  const normalizedEndpoint = typeof endpoint === 'string' ? endpoint.trim() : ''
+  const isLocalInsecureEndpoint =
+    /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(normalizedEndpoint)
+
+  if (protocol === 'https:' && isLocalInsecureEndpoint) {
+    return {
+      detail:
+        'This HTTPS page is trying to reach an insecure local bridge. Browsers often block https:// pages from calling http://127.0.0.1 or ws://127.0.0.1 directly.',
+      hint:
+        'Use the local frontend during development, or add a secure local bridge layer before connecting from the public Vercel site.',
+    }
+  }
+
+  return {
+    detail: message,
+    hint: '',
+  }
+}
+
 module.exports = {
   summarizeHealthPayload,
+  summarizeConnectFailure,
 }

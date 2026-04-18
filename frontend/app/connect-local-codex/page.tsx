@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { buildBridgeGuide } from '@/lib/bridgeGuide'
 import { getConnectCopy } from '@/lib/connectContent'
-import { summarizeHealthPayload } from '@/lib/connectDiagnostics'
+import { summarizeConnectFailure, summarizeHealthPayload } from '@/lib/connectDiagnostics'
 import { shouldAutoEnterWorkspace } from '@/lib/connectFlow'
 import {
   clearBrowserBackendOverride,
@@ -112,9 +112,10 @@ export default function ConnectLocalCodexPage() {
         checks: nextChecks,
       })
     } catch (error) {
+      const failure = summarizeConnectFailure(error, normalized, window)
       setHealth({
         status: 'error',
-        details: error instanceof Error ? error.message : 'Unable to reach the local bridge.',
+        details: failure.hint ? `${failure.detail} ${failure.hint}` : failure.detail,
       })
     }
   }
@@ -157,6 +158,9 @@ export default function ConnectLocalCodexPage() {
           <h1 className="text-4xl font-semibold tracking-[-0.03em] text-white">{copy.title}</h1>
           <p className="max-w-3xl text-sm leading-7 text-[rgba(148,163,184,0.84)]">
             {copy.description}
+          </p>
+          <p className="max-w-3xl text-xs leading-6 text-[rgba(125,211,252,0.8)]">
+            {copy.localAuthNote}
           </p>
         </div>
 
@@ -238,6 +242,9 @@ export default function ConnectLocalCodexPage() {
                 </div>
               ) : null}
             </div>
+            <p className="mt-4 text-xs leading-6 text-[rgba(148,163,184,0.7)]">
+              {copy.publicSiteWarning}
+            </p>
           </div>
 
           <aside className="rounded-[32px] border border-[rgba(148,163,184,0.12)] bg-[rgba(7,10,19,0.92)] p-7">

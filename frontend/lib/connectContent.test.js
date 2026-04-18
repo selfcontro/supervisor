@@ -12,4 +12,6 @@ test('getConnectCopy returns english UI labels', () => {
   assert.equal(copy.workspaceAction, 'Open Workspace')
   assert.equal(copy.redirecting, 'Connection verified. Opening workspace...')
   assert.match(copy.title, /Vercel frontend/i)
+  assert.match(copy.localAuthNote, /local Codex setup/i)
+  assert.match(copy.publicSiteWarning, /public Vercel domain/i)
 })
