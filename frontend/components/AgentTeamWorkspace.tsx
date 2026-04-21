@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 import DotField from '@/components/DotField'
 import FlowChart from '@/components/FlowChart'
-import { dispatchCodexTask, finishCodexTask } from '@/lib/codexControlApi'
+import { dispatchCodexTask, finishCodexTask, interruptCodexAgent } from '@/lib/codexControlApi'
 import { classifySessionSnapshotFailure, classifyWorkspaceLoadFailure } from '@/lib/runtimeConfig'
 import {
   SessionApiError,
@@ -43,6 +43,7 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
   const [taskPanelOpen, setTaskPanelOpen] = useState(false)
   const [prompt, setPrompt] = useState('')
   const [isSendingPrompt, setIsSendingPrompt] = useState(false)
+  const [interruptingAgentId, setInterruptingAgentId] = useState<string | null>(null)
   const [promptError, setPromptError] = useState<string | null>(null)
   const [finishingTaskId, setFinishingTaskId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -474,6 +475,10 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
     error: 'bg-rose-400',
     interrupted: 'bg-orange-400',
   }
+  const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) || null
+  const canInterruptSelectedAgent = Boolean(
+    selectedAgent && ['working', 'waiting'].includes(selectedAgent.status)
+  )
 
   async function handleSubmitPrompt(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -512,6 +517,40 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
       setFinishingTaskId(null)
     }
   }
+
+  async function handleInterruptSelectedAgent() {
+    if (!selectedAgentId || !canInterruptSelectedAgent || interruptingAgentId) {
+      return
+    }
+
+    setInterruptingAgentId(selectedAgentId)
+    setPromptError(null)
+    try {
+      await interruptCodexAgent(sessionId, selectedAgentId)
+    } catch (interruptError) {
+      setPromptError(getErrorMessage(interruptError))
+    } finally {
+      setInterruptingAgentId(null)
+    }
+  }
+
+  useEffect(() => {
+    function handleGlobalKeydown(event: KeyboardEvent) {
+      if (event.key !== 'Escape' || event.defaultPrevented) {
+        return
+      }
+
+      if (!selectedAgentId || !canInterruptSelectedAgent || interruptingAgentId) {
+        return
+      }
+
+      event.preventDefault()
+      void handleInterruptSelectedAgent()
+    }
+
+    window.addEventListener('keydown', handleGlobalKeydown)
+    return () => window.removeEventListener('keydown', handleGlobalKeydown)
+  }, [canInterruptSelectedAgent, interruptingAgentId, selectedAgentId, sessionId, agents])
 
   return (
     <main className="h-screen w-screen overflow-hidden bg-[#04070d]">
@@ -659,16 +698,32 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
           />
           <div className="mt-2 flex items-center justify-between">
             <p className="text-[10px] uppercase tracking-[0.12em] text-[rgba(148,163,184,0.62)]">
-              Enter to send · Shift+Enter for newline
+              Enter to send · Shift+Enter for newline · Esc to interrupt selected agent
             </p>
-            <button
-              type="submit"
-            disabled={isSendingPrompt || !prompt.trim() || Boolean(activeRootTask)}
-            className="rounded-full border border-[rgba(125,211,252,0.24)] bg-[rgba(8,47,73,0.5)] px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-[rgba(191,219,254,0.92)] transition hover:border-[rgba(125,211,252,0.46)] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isSendingPrompt ? 'Sending…' : 'Send'}
-          </button>
-        </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void handleInterruptSelectedAgent()}
+                disabled={!canInterruptSelectedAgent || Boolean(interruptingAgentId)}
+                className="rounded-full border border-[rgba(248,113,113,0.24)] bg-[rgba(69,10,10,0.52)] px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-[rgba(254,202,202,0.92)] transition hover:border-[rgba(248,113,113,0.44)] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {interruptingAgentId === selectedAgentId ? 'Interrupting…' : 'Interrupt'}
+              </button>
+              <button
+                type="submit"
+                disabled={isSendingPrompt || !prompt.trim() || Boolean(activeRootTask)}
+                className="rounded-full border border-[rgba(125,211,252,0.24)] bg-[rgba(8,47,73,0.5)] px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-[rgba(191,219,254,0.92)] transition hover:border-[rgba(125,211,252,0.46)] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSendingPrompt ? 'Sending…' : 'Send'}
+              </button>
+            </div>
+          </div>
+        {selectedAgent ? (
+          <p className="mt-2 text-xs text-[rgba(148,163,184,0.78)]">
+            Selected agent: <span className="text-[rgba(241,245,249,0.92)]">{selectedAgent.name}</span>
+            <span className="text-[rgba(148,163,184,0.62)]"> · {selectedAgent.status}</span>
+          </p>
+        ) : null}
         {activeRootTask ? (
           <p className="mt-2 text-xs text-[rgba(148,163,184,0.78)]">
             Current team task in progress: <span className="text-[rgba(241,245,249,0.92)]">{activeRootTask.description}</span>
