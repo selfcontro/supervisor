@@ -30,7 +30,7 @@ export default function LandingOverlay() {
           <div className="flex items-center justify-center gap-8">
             <Link href="/connect-local-codex" className="text-cyan-200">
               <VariableProximity
-                label="Get Start"
+                label="Get Started"
                 className="text-base tracking-[0.01em]"
                 containerRef={linksRef}
                 radius={220}
