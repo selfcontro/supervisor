@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { type FormEvent, useEffect, useRef, useState } from 'react'
+import BlackboardPanel from '@/components/BlackboardPanel'
 import DotField from '@/components/DotField'
 import FlowChart from '@/components/FlowChart'
 import { dispatchCodexTask, finishCodexTask, interruptCodexAgent } from '@/lib/codexControlApi'
@@ -41,6 +42,7 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
   const [logs, setLogs] = useState<SessionLogEntry[]>([])
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [taskPanelOpen, setTaskPanelOpen] = useState(false)
+  const [blackboardPanelOpen, setBlackboardPanelOpen] = useState(false)
   const [prompt, setPrompt] = useState('')
   const [isSendingPrompt, setIsSendingPrompt] = useState(false)
   const [interruptingAgentId, setInterruptingAgentId] = useState<string | null>(null)
@@ -582,6 +584,14 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
       <div className="fixed right-4 top-20 z-20 flex flex-col items-end gap-3">
         <button
           type="button"
+          onClick={() => setBlackboardPanelOpen((current) => !current)}
+          className="rounded-full border border-[rgba(148,163,184,0.14)] bg-[rgba(2,6,23,0.8)] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-[rgba(226,232,240,0.78)] backdrop-blur transition hover:border-[rgba(125,211,252,0.32)] hover:text-white"
+        >
+          Blackboard
+          {selectedAgent ? ` · ${selectedAgent.name}` : ''}
+        </button>
+        <button
+          type="button"
           onClick={() => setTaskPanelOpen((current) => !current)}
           className="rounded-full border border-[rgba(148,163,184,0.14)] bg-[rgba(2,6,23,0.8)] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-[rgba(226,232,240,0.78)] backdrop-blur transition hover:border-[rgba(125,211,252,0.32)] hover:text-white"
         >
@@ -674,6 +684,16 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
               </div>
             )}
           </aside>
+        ) : null}
+
+        {blackboardPanelOpen ? (
+          <BlackboardPanel
+            open={blackboardPanelOpen}
+            sessionId={sessionId}
+            selectedAgentId={selectedAgentId}
+            selectedAgentName={selectedAgent?.name || null}
+            onClose={() => setBlackboardPanelOpen(false)}
+          />
         ) : null}
       </div>
       <div className="pointer-events-none fixed inset-x-0 bottom-3 z-20 flex justify-center px-4">

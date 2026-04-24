@@ -54,6 +54,23 @@ export interface CodexDispatchResponse {
   status: string
 }
 
+export interface BlackboardSection {
+  id: string
+  title: string
+  content: string
+}
+
+export interface BlackboardDocument {
+  sessionId: string
+  agentId?: string
+  scope: 'session' | 'agent'
+  version: number
+  markdown: string
+  sections: BlackboardSection[]
+  updatedAt: string | null
+  source: string
+}
+
 export async function listCodexAgents(sessionId: string): Promise<CodexAgentView[]> {
   const response = await request<{ agents: CodexAgentView[] }>(`/api/codex-control/sessions/${encodeURIComponent(sessionId)}/agents`)
   return response.agents
@@ -143,11 +160,38 @@ export async function fetchSessionBlackboardMarkdown(sessionId: string) {
   })
 }
 
+export async function fetchSessionBlackboard(sessionId: string) {
+  return request<BlackboardDocument>(`/api/codex-control/sessions/${encodeURIComponent(sessionId)}/blackboard`)
+}
+
+export async function saveSessionBlackboard(sessionId: string, markdown: string) {
+  return request<BlackboardDocument>(`/api/codex-control/sessions/${encodeURIComponent(sessionId)}/blackboard`, {
+    method: 'PUT',
+    body: JSON.stringify({ markdown }),
+  })
+}
+
 export async function fetchAgentBlackboardMarkdown(sessionId: string, agentId: string) {
   return request<string>(
     `/api/codex-control/sessions/${encodeURIComponent(sessionId)}/agents/${encodeURIComponent(agentId)}/blackboard/markdown`,
     {
       parseAsText: true,
+    }
+  )
+}
+
+export async function fetchAgentBlackboard(sessionId: string, agentId: string) {
+  return request<BlackboardDocument>(
+    `/api/codex-control/sessions/${encodeURIComponent(sessionId)}/agents/${encodeURIComponent(agentId)}/blackboard`
+  )
+}
+
+export async function saveAgentBlackboard(sessionId: string, agentId: string, markdown: string) {
+  return request<BlackboardDocument>(
+    `/api/codex-control/sessions/${encodeURIComponent(sessionId)}/agents/${encodeURIComponent(agentId)}/blackboard`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ markdown }),
     }
   )
 }
