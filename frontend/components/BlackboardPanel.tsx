@@ -111,6 +111,17 @@ export default function BlackboardPanel({
 
   const structuredSections = useMemo(() => currentDoc?.sections || [], [currentDoc])
   const proposedCandidates = useMemo(() => buildProposedMemoryCandidates(tasks, logs), [tasks, logs])
+  const proposedMemoryLines = useMemo(() => {
+    const proposedSection = sessionDoc?.sections.find((section) => section.id === 'proposed_memory')
+    if (!proposedSection || typeof proposedSection.content !== 'string') {
+      return []
+    }
+
+    return proposedSection.content
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+  }, [sessionDoc])
 
   function updateSection(sectionId: string, content: string) {
     if (!currentDoc) {
@@ -304,23 +315,14 @@ export default function BlackboardPanel({
               ) : null}
 
               {activeTab === 'session'
-                ? sessionDoc?.sections
-                    .find((section) => section.id === 'proposed_memory')
-                    ?.content.split('\n')
-                    .map((line) => line.trim())
-                    .filter(Boolean).length
+                ? proposedMemoryLines.length
                   ? (
                     <div className="rounded-2xl border border-[rgba(34,197,94,0.14)] bg-[rgba(20,83,45,0.14)] p-3">
                       <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[rgba(134,239,172,0.8)]">
                         Promote to Shared Memory
                       </p>
                       <div className="mt-3 space-y-2">
-                        {sessionDoc.sections
-                          .find((section) => section.id === 'proposed_memory')
-                          ?.content.split('\n')
-                          .map((line) => line.trim())
-                          .filter(Boolean)
-                          .map((line) => (
+                        {proposedMemoryLines.map((line) => (
                             <div
                               key={line}
                               className="flex items-start justify-between gap-3 rounded-xl border border-[rgba(148,163,184,0.1)] bg-[rgba(2,6,23,0.48)] px-3 py-2"
@@ -353,7 +355,7 @@ export default function BlackboardPanel({
                   <textarea
                     value={section.content}
                     onChange={(event) => updateSection(section.id, event.target.value)}
-                    rows={Math.max(3, section.content.split('\n').length || 1)}
+                    rows={Math.max(3, String(section.content || '').split('\n').length || 1)}
                     className="mt-2 min-h-[84px] w-full resize-y rounded-xl border border-[rgba(148,163,184,0.12)] bg-[rgba(2,6,23,0.64)] px-3 py-2 text-sm leading-6 text-[rgba(241,245,249,0.94)] outline-none placeholder:text-[rgba(148,163,184,0.5)]"
                   />
                 </div>
