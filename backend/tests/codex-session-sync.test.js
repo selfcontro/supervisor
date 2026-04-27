@@ -180,9 +180,11 @@ test('agent-main creates multiple duty-based worker agents for long tasks and ke
   assert.ok(workerAgents.some((agent) => /frontend|ui/i.test(agent.name)))
   assert.ok(workerAgents.some((agent) => /backend|integration|data/i.test(agent.name)))
   assert.equal(snapshotAfterBreakdown.workflowAgents.find((agent) => agent.stageId === 'quality-gate'), undefined)
+  const subTasks = snapshotAfterBreakdown.tasks.find((task) => task.id === dispatchResult.taskId)?.subTasks || []
+  assert.equal(subTasks[0], `${dispatchResult.taskId}:task-breakdown`)
   assert.deepEqual(
-    snapshotAfterBreakdown.tasks.find((task) => task.id === dispatchResult.taskId)?.subTasks,
-    [`${dispatchResult.taskId}:task-breakdown`, ...workerAgents.map((agent) => `${dispatchResult.taskId}:${agent.stageId}`)]
+    subTasks.slice(1).sort(),
+    workerAgents.map((agent) => `${dispatchResult.taskId}:${agent.stageId}`).sort()
   )
 
   for (const workerAgent of workerAgents) {
@@ -236,7 +238,9 @@ test('agent-main creates multiple duty-based worker agents for long tasks and ke
   const finishedParentTask = snapshotAfterFinish.tasks.find((task) => task.id === dispatchResult.taskId)
   assert.equal(finishedParentTask?.status, 'completed')
   assert.equal(snapshotAfterFinish.agents.find((agent) => agent.id === 'agent-main')?.status, 'idle')
-  assert.equal(snapshotAfterFinish.workflowAgents.length, 0)
+  assert.ok(snapshotAfterFinish.workflowAgents.length >= 4)
+  assert.equal(snapshotAfterFinish.workflowAgents.every((agent) => agent.status === 'completed'), true)
+  assert.equal(snapshotAfterFinish.workflowAgents.find((agent) => agent.stageId === 'task-breakdown')?.name, 'Task Breakdown')
 
   await orchestrator.stop()
 })
@@ -299,6 +303,52 @@ test('simple team tasks create a single primary worker before quality gate', asy
     `${dispatchResult.taskId}:${executorRuntime.stageId}`,
     `${dispatchResult.taskId}:quality-gate`,
   ])
+
+  await orchestrator.stop()
+})
+
+test('agent-team intent prompts create frontend/backend/test style worker split', async () => {
+  const sessionStore = new SessionStore()
+  const registry = new AgentRegistry()
+  const client = new FakeCodexClient()
+  const blackboard = new FakeBlackboardStore()
+
+  const orchestrator = new CodexOrchestrator({
+    client,
+    registry,
+    blackboard,
+    sessionStore,
+    broadcast: () => {}
+  })
+
+  await orchestrator.start()
+
+  const dispatchResult = await orchestrator.dispatchTask('default', 'agent-main', {
+    title: 'Agent team usage demo',
+    prompt: 'Use an agent team to finish this task with clear workstreams and execution visibility.'
+  })
+
+  const breakdownRuntime = sessionStore.getSessionSnapshot('default').workflowAgents.find((agent) => agent.stageId === 'task-breakdown')
+  await orchestrator.handleNotification({
+    method: 'turn/completed',
+    params: {
+      threadId: breakdownRuntime.threadId,
+      turnId: breakdownRuntime.activeTurnId,
+      turn: {
+        outputText: 'Scope and handoff ready'
+      }
+    }
+  })
+
+  const snapshotAfterBreakdown = sessionStore.getSessionSnapshot('default')
+  const workerStageIds = snapshotAfterBreakdown.workflowAgents
+    .map((agent) => agent.stageId)
+    .filter((stageId) => stageId && stageId !== 'task-breakdown' && stageId !== 'quality-gate')
+    .sort()
+
+  assert.ok(workerStageIds.includes('ui-build'))
+  assert.ok(workerStageIds.includes('backend-integration'))
+  assert.ok(workerStageIds.includes('validation-sweep'))
 
   await orchestrator.stop()
 })
@@ -393,7 +443,8 @@ test('awaiting-finish team tasks can be finished after orchestrator restart', as
   const snapshotAfterFinish = restartedSessionStore.getSessionSnapshot('default')
   assert.equal(snapshotAfterFinish.tasks.find((task) => task.id === dispatchResult.taskId)?.status, 'completed')
   assert.equal(snapshotAfterFinish.agents.find((agent) => agent.id === 'agent-main')?.status, 'idle')
-  assert.equal(snapshotAfterFinish.workflowAgents.length, 0)
+  assert.ok(snapshotAfterFinish.workflowAgents.length >= 3)
+  assert.equal(snapshotAfterFinish.workflowAgents.every((agent) => agent.status === 'completed'), true)
 
   await restartedOrchestrator.stop()
 })

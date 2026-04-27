@@ -1,5 +1,7 @@
 import AgentTeamWorkspace from '@/components/AgentTeamWorkspace'
 
+export const dynamic = 'force-dynamic'
+
 interface WorkspacePageProps {
   params: {
     sessionId: string

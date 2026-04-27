@@ -1,4 +1,6 @@
 const BACKEND_OVERRIDE_STORAGE_KEY = 'supervisor.backendOverride'
+const LEGACY_LOCAL_BACKEND_URL = 'http://127.0.0.1:3101'
+const DEFAULT_LOCAL_BACKEND_URL = 'http://127.0.0.1:3001'
 
 function stripTrailingSlashes(value) {
   if (typeof value !== 'string') {
@@ -19,7 +21,7 @@ function resolveApiUrl(env = process.env) {
     return legacyUrl
   }
 
-  return 'http://127.0.0.1:3101'
+  return DEFAULT_LOCAL_BACKEND_URL
 }
 
 function resolveWsUrl(env = process.env) {
@@ -41,7 +43,7 @@ function resolveWsUrl(env = process.env) {
     return apiUrl
   }
 
-  return 'ws://127.0.0.1:3101'
+  return 'ws://127.0.0.1:3001'
 }
 
 function normalizeOverrideValue(value) {
@@ -85,9 +87,55 @@ function clearBrowserBackendOverride(browser = globalThis?.window) {
   browser?.localStorage?.removeItem(BACKEND_OVERRIDE_STORAGE_KEY)
 }
 
+function shouldIgnoreBrowserOverride(override, env = process.env) {
+  const normalizedOverride = normalizeOverrideValue(override)
+  if (!normalizedOverride) {
+    return true
+  }
+
+  if (normalizedOverride !== LEGACY_LOCAL_BACKEND_URL) {
+    return false
+  }
+
+  const explicitEnvUrl = stripTrailingSlashes(env?.NEXT_PUBLIC_API_URL) || stripTrailingSlashes(env?.NEXT_PUBLIC_API_BASE)
+  if (!explicitEnvUrl) {
+    return true
+  }
+
+  return explicitEnvUrl !== LEGACY_LOCAL_BACKEND_URL
+}
+
+function deriveBrowserLocalApiUrl(browser = globalThis?.window) {
+  const protocol = typeof browser?.location?.protocol === 'string' ? browser.location.protocol : 'http:'
+  const hostname = typeof browser?.location?.hostname === 'string' ? browser.location.hostname : ''
+
+  if (!/^(localhost|127\.0\.0\.1)$/i.test(hostname)) {
+    return ''
+  }
+
+  const scheme = protocol === 'https:' ? 'https:' : 'http:'
+  return `${scheme}//${hostname}:3001`
+}
+
+function deriveBrowserLocalWsUrl(browser = globalThis?.window) {
+  const apiUrl = deriveBrowserLocalApiUrl(browser)
+  if (!apiUrl) {
+    return ''
+  }
+
+  return resolveWsUrl({
+    NEXT_PUBLIC_API_URL: apiUrl,
+  })
+}
+
 function resolveBrowserApiUrl(browser = globalThis?.window, env = process.env) {
+  const derivedLocalUrl = deriveBrowserLocalApiUrl(browser)
+  if (derivedLocalUrl) {
+    return derivedLocalUrl
+  }
+
   const override = readBrowserBackendOverride(browser)
-  if (override) {
+  if (override && !shouldIgnoreBrowserOverride(override, env)) {
     return override
   }
 
@@ -95,8 +143,13 @@ function resolveBrowserApiUrl(browser = globalThis?.window, env = process.env) {
 }
 
 function resolveBrowserWsUrl(browser = globalThis?.window, env = process.env) {
+  const derivedLocalWsUrl = deriveBrowserLocalWsUrl(browser)
+  if (derivedLocalWsUrl) {
+    return derivedLocalWsUrl
+  }
+
   const override = readBrowserBackendOverride(browser)
-  if (override) {
+  if (override && !shouldIgnoreBrowserOverride(override, env)) {
     return resolveWsUrl({
       NEXT_PUBLIC_API_URL: override,
     })

@@ -1,6 +1,8 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { once } = require('node:events')
+const fs = require('node:fs/promises')
+const os = require('node:os')
 const path = require('node:path')
 const { WebSocket } = require('ws')
 
@@ -262,4 +264,192 @@ test('server hydrates persisted blackboard sessions into REST and WebSocket snap
   assert.equal(agentStatus.payload.agentId, 'agent-main')
   assert.equal(agentStatus.payload.data.status, 'completed')
   assert.equal(agentStatus.payload.data.currentTask, 'verify-task-update')
+})
+
+test('hydration interrupts stale active tasks that cannot be resumed', async (t) => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'supervisor-blackboard-'))
+  const previousBlackboardRoot = process.env.BLACKBOARD_ROOT_DIR
+  process.env.BLACKBOARD_ROOT_DIR = tempRoot
+
+  const sessionDir = path.join(tempRoot, 'sessions', 'stale-session')
+  await fs.mkdir(sessionDir, { recursive: true })
+  await fs.writeFile(
+    path.join(sessionDir, 'events.jsonl'),
+    [
+      JSON.stringify({
+        eventId: 'evt-1',
+        ts: '2026-04-15T12:40:44.870Z',
+        sessionId: 'stale-session',
+        agentId: 'agent-main',
+        threadId: 'thread-old',
+        turnId: null,
+        type: 'task_assigned',
+        task: {
+          taskId: 'codex_task_old',
+          title: 'layout overlap verification',
+          status: 'planning',
+          priority: 'normal'
+        },
+        payload: {},
+        idempotencyKey: null
+      }),
+      JSON.stringify({
+        eventId: 'evt-2',
+        ts: '2026-04-15T12:41:13.120Z',
+        sessionId: 'stale-session',
+        agentId: 'codex_task_old::primary-build',
+        threadId: 'thread-old-sub',
+        turnId: null,
+        type: 'task_progress',
+        task: {
+          taskId: 'codex_task_old:primary-build',
+          title: 'layout overlap verification · Primary Build',
+          status: 'executing',
+          priority: 'normal'
+        },
+        payload: {
+          event: 'turn_started'
+        },
+        idempotencyKey: null
+      }),
+    ].join('\n') + '\n',
+    'utf8'
+  )
+
+  const runtime = createServer({ port: 0, host: '127.0.0.1', startProcessing: false })
+
+  t.after(async () => {
+    process.env.BLACKBOARD_ROOT_DIR = previousBlackboardRoot
+    await runtime.stop().catch(() => {})
+    await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {})
+  })
+
+  await runtime.start()
+
+  const address = runtime.server.address()
+  const baseUrl = `http://127.0.0.1:${address.port}`
+  const snapshotRes = await fetch(`${baseUrl}/api/sessions/stale-session`)
+  assert.equal(snapshotRes.status, 200)
+  const snapshot = await snapshotRes.json()
+
+  const rootTask = snapshot.tasks.find((task) => task.id === 'codex_task_old')
+  const stageTask = snapshot.tasks.find((task) => task.id === 'codex_task_old:primary-build')
+  const mainAgent = snapshot.agents.find((agent) => agent.id === 'agent-main')
+
+  assert.equal(rootTask?.status, 'interrupted')
+  assert.equal(stageTask?.status, 'interrupted')
+  assert.equal(mainAgent?.status, 'idle')
+  assert.equal(mainAgent?.currentTask, null)
+})
+
+test('hydration promotes completed workflow roots to awaiting_finish instead of interrupting them', async (t) => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'supervisor-blackboard-'))
+  const previousBlackboardRoot = process.env.BLACKBOARD_ROOT_DIR
+  process.env.BLACKBOARD_ROOT_DIR = tempRoot
+
+  const sessionDir = path.join(tempRoot, 'sessions', 'finishable-session')
+  await fs.mkdir(sessionDir, { recursive: true })
+  await fs.writeFile(
+    path.join(sessionDir, 'events.jsonl'),
+    [
+      JSON.stringify({
+        eventId: 'evt-root',
+        ts: '2026-04-15T12:40:44.870Z',
+        sessionId: 'finishable-session',
+        agentId: 'agent-main',
+        threadId: 'thread-root',
+        turnId: null,
+        type: 'task_assigned',
+        task: {
+          taskId: 'codex_task_finishable',
+          title: 'Finishable workflow',
+          status: 'planning',
+          priority: 'normal'
+        },
+        payload: {},
+        idempotencyKey: null
+      }),
+      JSON.stringify({
+        eventId: 'evt-breakdown',
+        ts: '2026-04-15T12:41:00.000Z',
+        sessionId: 'finishable-session',
+        agentId: 'codex_task_finishable::task-breakdown',
+        threadId: 'thread-breakdown',
+        turnId: null,
+        type: 'task_done',
+        task: {
+          taskId: 'codex_task_finishable:task-breakdown',
+          title: 'Finishable workflow · Task Breakdown',
+          status: 'completed',
+          priority: 'normal'
+        },
+        payload: {
+          result: 'plan ready'
+        },
+        idempotencyKey: null
+      }),
+      JSON.stringify({
+        eventId: 'evt-primary',
+        ts: '2026-04-15T12:41:10.000Z',
+        sessionId: 'finishable-session',
+        agentId: 'codex_task_finishable::primary-build',
+        threadId: 'thread-primary',
+        turnId: null,
+        type: 'task_done',
+        task: {
+          taskId: 'codex_task_finishable:primary-build',
+          title: 'Finishable workflow · Primary Build',
+          status: 'completed',
+          priority: 'normal'
+        },
+        payload: {
+          result: 'worker ready'
+        },
+        idempotencyKey: null
+      }),
+      JSON.stringify({
+        eventId: 'evt-review',
+        ts: '2026-04-15T12:41:20.000Z',
+        sessionId: 'finishable-session',
+        agentId: 'codex_task_finishable::quality-gate',
+        threadId: 'thread-review',
+        turnId: null,
+        type: 'task_done',
+        task: {
+          taskId: 'codex_task_finishable:quality-gate',
+          title: 'Finishable workflow · Quality Gate',
+          status: 'completed',
+          priority: 'normal'
+        },
+        payload: {
+          result: 'review ready'
+        },
+        idempotencyKey: null
+      }),
+    ].join('\n') + '\n',
+    'utf8'
+  )
+
+  const runtime = createServer({ port: 0, host: '127.0.0.1', startProcessing: false })
+
+  t.after(async () => {
+    process.env.BLACKBOARD_ROOT_DIR = previousBlackboardRoot
+    await runtime.stop().catch(() => {})
+    await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {})
+  })
+
+  await runtime.start()
+
+  const address = runtime.server.address()
+  const baseUrl = `http://127.0.0.1:${address.port}`
+  const snapshotRes = await fetch(`${baseUrl}/api/sessions/finishable-session`)
+  assert.equal(snapshotRes.status, 200)
+  const snapshot = await snapshotRes.json()
+
+  const rootTask = snapshot.tasks.find((task) => task.id === 'codex_task_finishable')
+  const mainAgent = snapshot.agents.find((agent) => agent.id === 'agent-main')
+
+  assert.equal(rootTask?.status, 'awaiting_finish')
+  assert.equal(mainAgent?.status, 'waiting')
+  assert.equal(mainAgent?.currentTask, 'Finishable workflow')
 })

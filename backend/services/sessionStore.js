@@ -312,13 +312,17 @@ class SessionStore {
 
   getWorkflowAgents(sessionId) {
     const session = this.getSession(sessionId)
-    if (!session || !this.runtimeAgentProvider) {
+    if (!session) {
       return []
     }
 
-    return (this.runtimeAgentProvider(session.id) || [])
-      .map(runtimeAgent => normalizeRuntimeAgent(runtimeAgent))
-      .filter(agent => agent && agent.ephemeral)
+    const runtimeWorkflowAgents = this.runtimeAgentProvider
+      ? (this.runtimeAgentProvider(session.id) || [])
+        .map(runtimeAgent => normalizeRuntimeAgent(runtimeAgent))
+        .filter(agent => agent && agent.ephemeral)
+      : []
+
+    return mergeWorkflowAgents(runtimeWorkflowAgents, deriveHistoricalWorkflowAgents(this.getTasks(session.id)))
   }
 
   getLogs(sessionId) {
@@ -342,7 +346,7 @@ class SessionStore {
       })
       .map(session => {
         const tasks = this.getTasks(session.id)
-        const activeTaskCount = tasks.filter(task => !['completed', 'rejected'].includes(task.status)).length
+        const activeTaskCount = tasks.filter(task => !['completed', 'rejected', 'failed', 'error', 'interrupted'].includes(task.status)).length
 
       return {
         id: session.id,
@@ -512,4 +516,135 @@ function shouldIgnorePersistentAgent(agentId, agent) {
   }
 
   return false
+}
+
+function mergeWorkflowAgents(runtimeAgents, historicalAgents) {
+  const agentsById = new Map()
+
+  for (const agent of historicalAgents) {
+    agentsById.set(agent.id, agent)
+  }
+
+  for (const agent of runtimeAgents) {
+    agentsById.set(agent.id, agent)
+  }
+
+  return Array.from(agentsById.values()).sort((left, right) => {
+    const parentCompare = String(left.workflowParentTaskId || '').localeCompare(String(right.workflowParentTaskId || ''))
+    if (parentCompare !== 0) {
+      return parentCompare
+    }
+
+    return String(left.name || left.id).localeCompare(String(right.name || right.id))
+  })
+}
+
+function deriveHistoricalWorkflowAgents(tasks) {
+  if (!Array.isArray(tasks) || tasks.length === 0) {
+    return []
+  }
+
+  const rootTasks = tasks
+    .filter((task) => !task.parentTaskId && task.agentId === 'agent-main' && Array.isArray(task.subTasks) && task.subTasks.length > 0)
+    .sort((left, right) => new Date(right.updatedAt || right.createdAt || 0).getTime() - new Date(left.updatedAt || left.createdAt || 0).getTime())
+
+  const latestWorkflowTask = rootTasks.find((task) => task.subTasks.some((subTaskId) => typeof subTaskId === 'string' && subTaskId.includes(':')))
+  if (!latestWorkflowTask) {
+    return []
+  }
+
+  const tasksById = new Map(tasks.map((task) => [task.id, task]))
+  return latestWorkflowTask.subTasks
+    .map((subTaskId) => tasksById.get(subTaskId))
+    .filter((task) => task && task.stageId)
+    .map((task) => {
+      const descriptor = describeWorkflowStage(task.stageId)
+      return {
+        id: `${latestWorkflowTask.id}::${task.stageId}`,
+        name: descriptor.name,
+        role: descriptor.role,
+        status: mapHistoricalWorkflowAgentStatus(task.status),
+        currentTask: null,
+        ephemeral: true,
+        workflowParentTaskId: latestWorkflowTask.id,
+        stageId: task.stageId,
+        threadId: null,
+        activeTurnId: null,
+      }
+    })
+}
+
+function describeWorkflowStage(stageId) {
+  const normalized = typeof stageId === 'string' ? stageId.trim() : ''
+
+  if (normalized === 'task-breakdown') {
+    return {
+      name: 'Task Breakdown',
+      role: 'Owns the initial task breakdown and execution plan for the team.'
+    }
+  }
+
+  if (normalized === 'quality-gate') {
+    return {
+      name: 'Quality Gate',
+      role: 'Owns focused validation, QA, and final readiness review.'
+    }
+  }
+
+  if (normalized === 'primary-build') {
+    return {
+      name: 'Primary Build',
+      role: 'Owns the main implementation or analysis workstream.'
+    }
+  }
+
+  if (normalized === 'ui-build') {
+    return {
+      name: 'UI Build',
+      role: 'Owns the interface workstream, interaction details, and visual execution.'
+    }
+  }
+
+  if (normalized === 'backend-integration') {
+    return {
+      name: 'Backend Integration',
+      role: 'Owns backend, API, and data integration execution.'
+    }
+  }
+
+  if (normalized === 'validation-sweep') {
+    return {
+      name: 'Validation Sweep',
+      role: 'Owns focused validation, QA, and regression checks.'
+    }
+  }
+
+  return {
+    name: humanizeStageId(normalized),
+    role: `Owns the ${humanizeStageId(normalized).toLowerCase()} workstream for this task.`
+  }
+}
+
+function humanizeStageId(stageId) {
+  return String(stageId || '')
+    .split('-')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ') || 'Workflow Stage'
+}
+
+function mapHistoricalWorkflowAgentStatus(taskStatus) {
+  if (taskStatus === 'completed') {
+    return 'completed'
+  }
+  if (taskStatus === 'awaiting_finish' || taskStatus === 'waiting') {
+    return 'waiting'
+  }
+  if (taskStatus === 'failed' || taskStatus === 'error' || taskStatus === 'interrupted') {
+    return 'error'
+  }
+  if (taskStatus === 'reviewing' || taskStatus === 'planning' || taskStatus === 'executing' || taskStatus === 'assigned') {
+    return 'working'
+  }
+  return 'idle'
 }

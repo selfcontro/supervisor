@@ -29,8 +29,16 @@ class BlackboardStore {
     return path.join(this.sessionDir(sessionId), 'SESSION.md')
   }
 
+  sessionMetaPath(sessionId) {
+    return path.join(this.sessionDir(sessionId), 'SESSION.meta.json')
+  }
+
   agentMarkdownPath(sessionId, agentId) {
     return path.join(this.agentDir(sessionId, agentId), 'AGENT.md')
+  }
+
+  agentMetaPath(sessionId, agentId) {
+    return path.join(this.agentDir(sessionId, agentId), 'AGENT.meta.json')
   }
 
   async appendEvent(event, options = {}) {
@@ -258,6 +266,92 @@ class BlackboardStore {
     return events
   }
 
+  async getSessionDocument(sessionId) {
+    const markdown = await this.readSessionMarkdown(sessionId)
+    const meta = await this.readJsonSafe(this.sessionMetaPath(sessionId))
+    const normalizedMarkdown = markdown || defaultSessionMarkdown()
+
+    return {
+      sessionId,
+      scope: 'session',
+      version: Number(meta.version) || 0,
+      markdown: normalizedMarkdown,
+      sections: parseMarkdownSections(normalizedMarkdown, SESSION_SECTION_TITLES),
+      updatedAt: meta.updatedAt || null,
+      source: meta.source || 'materialized'
+    }
+  }
+
+  async getAgentDocument(sessionId, agentId) {
+    const markdown = await this.readAgentMarkdown(sessionId, agentId)
+    const meta = await this.readJsonSafe(this.agentMetaPath(sessionId, agentId))
+    const normalizedMarkdown = markdown || defaultAgentMarkdown()
+
+    return {
+      sessionId,
+      agentId,
+      scope: 'agent',
+      version: Number(meta.version) || 0,
+      markdown: normalizedMarkdown,
+      sections: parseMarkdownSections(normalizedMarkdown, AGENT_SECTION_TITLES),
+      updatedAt: meta.updatedAt || null,
+      source: meta.source || 'materialized'
+    }
+  }
+
+  async saveSessionDocument(sessionId, payload = {}) {
+    const detail = buildDocumentDetail({
+      sessionId,
+      scope: 'session',
+      markdown: payload.markdown,
+      sectionTitles: SESSION_SECTION_TITLES,
+      fallbackMarkdown: defaultSessionMarkdown(),
+      meta: await this.readJsonSafe(this.sessionMetaPath(sessionId)),
+      source: payload.source || 'user'
+    })
+
+    await fs.mkdir(path.dirname(this.sessionMarkdownPath(sessionId)), { recursive: true })
+    await fs.writeFile(this.sessionMarkdownPath(sessionId), `${detail.markdown.trimEnd()}\n`, 'utf8')
+    await fs.writeFile(
+      this.sessionMetaPath(sessionId),
+      `${JSON.stringify({
+        version: detail.version,
+        updatedAt: detail.updatedAt,
+        source: detail.source
+      }, null, 2)}\n`,
+      'utf8'
+    )
+
+    return detail
+  }
+
+  async saveAgentDocument(sessionId, agentId, payload = {}) {
+    const detail = buildDocumentDetail({
+      sessionId,
+      agentId,
+      scope: 'agent',
+      markdown: payload.markdown,
+      sectionTitles: AGENT_SECTION_TITLES,
+      fallbackMarkdown: defaultAgentMarkdown(),
+      meta: await this.readJsonSafe(this.agentMetaPath(sessionId, agentId)),
+      source: payload.source || 'user'
+    })
+
+    await fs.mkdir(path.dirname(this.agentMarkdownPath(sessionId, agentId)), { recursive: true })
+    await fs.writeFile(this.agentMarkdownPath(sessionId, agentId), `${detail.markdown.trimEnd()}\n`, 'utf8')
+    await fs.writeFile(
+      this.agentMetaPath(sessionId, agentId),
+      `${JSON.stringify({
+        version: detail.version,
+        updatedAt: detail.updatedAt,
+        source: detail.source
+      }, null, 2)}\n`,
+      'utf8'
+    )
+
+    return detail
+  }
+
   async readFileSafe(filePath) {
     try {
       return await fs.readFile(filePath, 'utf8')
@@ -268,7 +362,40 @@ class BlackboardStore {
       throw error
     }
   }
+
+  async readJsonSafe(filePath) {
+    const content = await this.readFileSafe(filePath)
+    if (!content) {
+      return {}
+    }
+
+    try {
+      return JSON.parse(content)
+    } catch {
+      return {}
+    }
+  }
 }
+
+const SESSION_SECTION_TITLES = [
+  ['objective', 'Objective'],
+  ['shared_memory', 'Shared Memory'],
+  ['proposed_memory', 'Proposed Memory'],
+  ['current_plan', 'Current Plan'],
+  ['delegated_tasks', 'Delegated Tasks'],
+  ['decisions', 'Decisions'],
+  ['open_questions', 'Open Questions'],
+  ['user_notes', 'User Notes']
+]
+
+const AGENT_SECTION_TITLES = [
+  ['role', 'Role'],
+  ['current_focus', 'Current Focus'],
+  ['local_memory', 'Local Memory'],
+  ['findings', 'Findings'],
+  ['next_steps', 'Next Steps'],
+  ['user_notes', 'User Notes']
+]
 
 function normalizeEvent(event) {
   const now = new Date().toISOString()
@@ -364,6 +491,99 @@ function previewPayload(payload, maxLength) {
     return text
   }
   return `${text.slice(0, maxLength)}...`
+}
+
+function buildDocumentDetail({ sessionId, agentId = null, scope, markdown, sectionTitles, fallbackMarkdown, meta, source }) {
+  const normalizedMarkdown = normalizeDocumentMarkdown(markdown || fallbackMarkdown, sectionTitles)
+  const sections = parseMarkdownSections(normalizedMarkdown, sectionTitles)
+  const updatedAt = new Date().toISOString()
+  const detail = {
+    sessionId,
+    scope,
+    version: (Number(meta?.version) || 0) + 1,
+    markdown: normalizedMarkdown,
+    sections,
+    updatedAt,
+    source
+  }
+
+  if (agentId) {
+    detail.agentId = agentId
+  }
+
+  return detail
+}
+
+function normalizeDocumentMarkdown(markdown, sectionTitles) {
+  const trimmed = typeof markdown === 'string' ? markdown.trim() : ''
+  if (!trimmed) {
+    return renderMarkdownSections(sectionTitles)
+  }
+
+  const sections = parseMarkdownSections(trimmed, sectionTitles)
+  return renderMarkdownSections(
+    sectionTitles,
+    Object.fromEntries(sections.map((section) => [section.id, section.content]))
+  )
+}
+
+function parseMarkdownSections(markdown, sectionTitles) {
+  const lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n')
+  const sections = []
+  let current = null
+
+  for (const line of lines) {
+    const heading = line.match(/^##\s+(.+?)\s*$/)
+    if (heading) {
+      const title = heading[1].trim()
+      const matched = sectionTitles.find(([, expectedTitle]) => expectedTitle === title)
+      if (matched) {
+        current = { id: matched[0], title: matched[1], lines: [] }
+        sections.push(current)
+      } else {
+        current = null
+      }
+      continue
+    }
+
+    if (current) {
+      current.lines.push(line)
+    }
+  }
+
+  const parsed = new Map(
+    sections.map((section) => [
+      section.id,
+      {
+        id: section.id,
+        title: section.title,
+        content: section.lines.join('\n').trim()
+      }
+    ])
+  )
+
+  return sectionTitles.map(([id, title]) => parsed.get(id) || { id, title, content: '' })
+}
+
+function renderMarkdownSections(sectionTitles, contents = {}) {
+  const heading = sectionTitles === SESSION_SECTION_TITLES ? '# Session Blackboard' : '# Agent Blackboard'
+  const lines = [heading, '']
+
+  for (const [id, title] of sectionTitles) {
+    lines.push(`## ${title}`)
+    lines.push(contents[id] || '')
+    lines.push('')
+  }
+
+  return lines.join('\n').trimEnd()
+}
+
+function defaultSessionMarkdown() {
+  return renderMarkdownSections(SESSION_SECTION_TITLES)
+}
+
+function defaultAgentMarkdown() {
+  return renderMarkdownSections(AGENT_SECTION_TITLES)
 }
 
 module.exports = { BlackboardStore }
