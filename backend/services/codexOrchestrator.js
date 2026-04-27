@@ -918,7 +918,9 @@ class CodexOrchestrator {
       throw new Error('Approval request not found')
     }
 
-    this.resumeTaskAfterApproval(sessionId, agentId, pending.task)
+    if (isApprovalAcceptedDecision(decision)) {
+      this.resumeTaskAfterApproval(sessionId, agentId, pending.task)
+    }
     this.client.respond(requestId, {
       decision
     })
@@ -1208,7 +1210,9 @@ class CodexOrchestrator {
     }
 
     const decision = chooseDecision(availableDecisions, this.autoApprovalMode)
-    this.resumeTaskAfterApproval(agent.sessionId, agent.agentId, approval.task)
+    if (isApprovalAcceptedDecision(decision)) {
+      this.resumeTaskAfterApproval(agent.sessionId, agent.agentId, approval.task)
+    }
     this.client.respond(message.id, {
       decision
     })
@@ -1983,6 +1987,22 @@ function chooseDecision(availableDecisions, mode) {
   }
 
   return availableDecisions[0]
+}
+
+function isApprovalAcceptedDecision(decision) {
+  if (typeof decision === 'string') {
+    const normalized = decision.trim().toLowerCase()
+    return normalized === 'accept' || normalized === 'approve' || normalized === 'allow'
+  }
+
+  if (decision && typeof decision === 'object') {
+    return Object.keys(decision).some((key) => {
+      const normalized = key.trim().toLowerCase()
+      return normalized.startsWith('accept') || normalized.startsWith('approve') || normalized.startsWith('allow')
+    })
+  }
+
+  return false
 }
 
 module.exports = { CodexOrchestrator }

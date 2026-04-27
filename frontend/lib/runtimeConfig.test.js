@@ -327,6 +327,42 @@ test('resolveBrowserWsUrl always prefers local websocket on localhost pages rega
   assert.equal(wsUrl, 'ws://localhost:3001')
 })
 
+test('resolveBrowserApiUrl uses env local port when page is localhost', () => {
+  const apiUrl = resolveBrowserApiUrl(
+    {
+      location: {
+        protocol: 'http:',
+        hostname: '127.0.0.1',
+        port: '3000',
+      },
+      localStorage: createStorage(),
+    },
+    {
+      NEXT_PUBLIC_API_URL: 'http://127.0.0.1:3101',
+    }
+  )
+
+  assert.equal(apiUrl, 'http://127.0.0.1:3101')
+})
+
+test('resolveBrowserWsUrl uses env local port when page is localhost', () => {
+  const wsUrl = resolveBrowserWsUrl(
+    {
+      location: {
+        protocol: 'http:',
+        hostname: 'localhost',
+        port: '3000',
+      },
+      localStorage: createStorage(),
+    },
+    {
+      NEXT_PUBLIC_API_URL: 'http://127.0.0.1:3101',
+    }
+  )
+
+  assert.equal(wsUrl, 'ws://localhost:3101')
+})
+
 test('clearBrowserBackendOverride removes persisted override', () => {
   const localStorage = createStorage()
   saveBrowserBackendOverride(

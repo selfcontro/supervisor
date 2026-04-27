@@ -105,7 +105,26 @@ function shouldIgnoreBrowserOverride(override, env = process.env) {
   return explicitEnvUrl !== LEGACY_LOCAL_BACKEND_URL
 }
 
-function deriveBrowserLocalApiUrl(browser = globalThis?.window) {
+function deriveLocalBackendPort(env = process.env) {
+  const configuredApiUrl = resolveApiUrl(env)
+  try {
+    const parsed = new URL(configuredApiUrl)
+    if (parsed.port) {
+      return parsed.port
+    }
+  } catch {
+    // Fallback handled below.
+  }
+
+  try {
+    const fallback = new URL(DEFAULT_LOCAL_BACKEND_URL)
+    return fallback.port || '3001'
+  } catch {
+    return '3001'
+  }
+}
+
+function deriveBrowserLocalApiUrl(browser = globalThis?.window, env = process.env) {
   const protocol = typeof browser?.location?.protocol === 'string' ? browser.location.protocol : 'http:'
   const hostname = typeof browser?.location?.hostname === 'string' ? browser.location.hostname : ''
 
@@ -114,11 +133,12 @@ function deriveBrowserLocalApiUrl(browser = globalThis?.window) {
   }
 
   const scheme = protocol === 'https:' ? 'https:' : 'http:'
-  return `${scheme}//${hostname}:3001`
+  const port = deriveLocalBackendPort(env)
+  return `${scheme}//${hostname}:${port}`
 }
 
-function deriveBrowserLocalWsUrl(browser = globalThis?.window) {
-  const apiUrl = deriveBrowserLocalApiUrl(browser)
+function deriveBrowserLocalWsUrl(browser = globalThis?.window, env = process.env) {
+  const apiUrl = deriveBrowserLocalApiUrl(browser, env)
   if (!apiUrl) {
     return ''
   }
@@ -129,7 +149,7 @@ function deriveBrowserLocalWsUrl(browser = globalThis?.window) {
 }
 
 function resolveBrowserApiUrl(browser = globalThis?.window, env = process.env) {
-  const derivedLocalUrl = deriveBrowserLocalApiUrl(browser)
+  const derivedLocalUrl = deriveBrowserLocalApiUrl(browser, env)
   if (derivedLocalUrl) {
     return derivedLocalUrl
   }
@@ -143,7 +163,7 @@ function resolveBrowserApiUrl(browser = globalThis?.window, env = process.env) {
 }
 
 function resolveBrowserWsUrl(browser = globalThis?.window, env = process.env) {
-  const derivedLocalWsUrl = deriveBrowserLocalWsUrl(browser)
+  const derivedLocalWsUrl = deriveBrowserLocalWsUrl(browser, env)
   if (derivedLocalWsUrl) {
     return derivedLocalWsUrl
   }

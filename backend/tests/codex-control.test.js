@@ -228,6 +228,45 @@ test('approval requests move tasks into waiting until a decision resumes executi
   await fs.rm(harness.tmpDir, { recursive: true, force: true })
 })
 
+test('approval cancel decision keeps task paused instead of resuming execution', async () => {
+  const harness = await createHarness()
+
+  const dispatch = await harness.orchestrator.dispatchTask('sessionApprovalCancel', 'agentB', {
+    title: 'Run gated validation',
+    prompt: 'Run gated validation.'
+  })
+
+  await harness.orchestrator.handleServerRequest({
+    id: 'approval_req_cancel',
+    method: 'item/commandExecution/requestApproval',
+    params: {
+      threadId: dispatch.threadId,
+      turnId: dispatch.turnId,
+      command: '/bin/zsh -lc "npm test"',
+      cwd: '/tmp',
+      availableDecisions: ['accept', 'cancel']
+    }
+  })
+
+  await harness.orchestrator.respondApproval('sessionApprovalCancel', 'agentB', 'approval_req_cancel', 'cancel')
+
+  const snapshot = harness.orchestrator.sessionStore.getSessionSnapshot('sessionApprovalCancel')
+  const task = snapshot.tasks.find((entry) => entry.id === dispatch.taskId)
+  const agent = snapshot.agents.find((entry) => entry.id === 'agentB')
+
+  assert.equal(task?.status, 'waiting')
+  assert.equal(agent?.status, 'waiting')
+  assert.deepEqual(harness.orchestrator.client.responses.at(-1), {
+    requestId: 'approval_req_cancel',
+    payload: {
+      decision: 'cancel'
+    }
+  })
+
+  await harness.orchestrator.stop()
+  await fs.rm(harness.tmpDir, { recursive: true, force: true })
+})
+
 test('renders swarm duty tasks in session blackboard markdown', async () => {
   const harness = await createHarness()
 
