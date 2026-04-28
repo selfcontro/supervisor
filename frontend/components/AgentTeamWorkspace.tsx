@@ -395,6 +395,29 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
     return () => window.removeEventListener('keydown', handleGlobalKeydown)
   }, [canInterruptSelectedAgent, interruptingAgentId, selectedAgentId, sessionId, agents])
 
+  useEffect(() => {
+    if (!awaitingFinishRootTask) {
+      autoFinishingRootTaskRef.current = null
+      return
+    }
+
+    if (autoFinishingRootTaskRef.current === awaitingFinishRootTask.id || finishingTaskId) {
+      return
+    }
+
+    autoFinishingRootTaskRef.current = awaitingFinishRootTask.id
+    setFinishingTaskId(awaitingFinishRootTask.id)
+    setPromptError(null)
+
+    void finishCodexTask(sessionId, awaitingFinishRootTask.id)
+      .catch((finishError) => {
+        setPromptError(getErrorMessage(finishError))
+      })
+      .finally(() => {
+        setFinishingTaskId(null)
+      })
+  }, [awaitingFinishRootTask, finishingTaskId, sessionId])
+
   if (notFound) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#04070d] px-6 text-center">
@@ -495,29 +518,6 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
     error: 'bg-rose-400',
     interrupted: 'bg-orange-400',
   }
-
-  useEffect(() => {
-    if (!awaitingFinishRootTask) {
-      autoFinishingRootTaskRef.current = null
-      return
-    }
-
-    if (autoFinishingRootTaskRef.current === awaitingFinishRootTask.id || finishingTaskId) {
-      return
-    }
-
-    autoFinishingRootTaskRef.current = awaitingFinishRootTask.id
-    setFinishingTaskId(awaitingFinishRootTask.id)
-    setPromptError(null)
-
-    void finishCodexTask(sessionId, awaitingFinishRootTask.id)
-      .catch((finishError) => {
-        setPromptError(getErrorMessage(finishError))
-      })
-      .finally(() => {
-        setFinishingTaskId(null)
-      })
-  }, [awaitingFinishRootTask, finishingTaskId, sessionId])
 
   async function handleSubmitPrompt(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
