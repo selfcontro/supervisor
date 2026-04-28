@@ -25,11 +25,11 @@ test('workflow layout leaves enough vertical room between coordinator, breakdown
     'breakdown node should sit below the coordinator with enough gap'
   )
   assert.ok(
-    layout['task-1::ui-build'].y - layout['task-1::task-breakdown'].y >= 260,
+    layout['task-1::ui-build'].y - layout['task-1::task-breakdown'].y >= 340,
     'worker nodes should sit below breakdown without overlapping it'
   )
   assert.ok(
-    layout['task-1::quality-gate'].y - layout['task-1::ui-build'].y >= 260,
+    layout['task-1::quality-gate'].y - layout['task-1::ui-build'].y >= 380,
     'review node should sit below workers without overlapping them'
   )
   assert.notEqual(

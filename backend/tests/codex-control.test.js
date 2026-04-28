@@ -16,6 +16,7 @@ class FakeCodexClient extends EventEmitter {
     this.started = false
     this.threadCounter = 0
     this.turnCounter = 0
+    this.responses = []
   }
 
   async start() {
@@ -44,7 +45,8 @@ class FakeCodexClient extends EventEmitter {
     return { ok: true }
   }
 
-  respond() {
+  respond(requestId, payload) {
+    this.responses.push({ requestId, payload })
     return undefined
   }
 }
@@ -104,8 +106,9 @@ test('creates agent and dispatches task with blackboard records', async () => {
   assert.equal(dispatch.turnId, 'turn_test_1')
 
   const summary = await harness.orchestrator.getSessionBlackboard('sessionA')
-  assert.equal(summary.tasks.length, 1)
-  assert.equal(summary.tasks[0].taskId, dispatch.taskId)
+  assert.equal(summary.scope, 'session')
+  assert.match(summary.markdown, /Run diagnostics/)
+  assert.ok(summary.sections.some((section) => section.id === 'objective'))
 
   const markdown = await harness.orchestrator.getSessionMarkdown('sessionA')
   assert.match(markdown, /Session Blackboard: sessionA/)
@@ -165,11 +168,100 @@ test('captures command execution from notifications', async () => {
   })
 
   const detail = await harness.orchestrator.getAgentBlackboard('sessionB', 'agentB')
-  assert.ok(detail.events.some(event => event.type === 'command_execution'))
+  assert.equal(detail.scope, 'agent')
+  assert.match(detail.markdown, /echo test/)
+  assert.ok(detail.sections.some((section) => section.id === 'findings'))
 
   const emitted = harness.events.filter(event => event.type === 'command_execution')
   assert.equal(emitted.length, 1)
   assert.equal(emitted[0].payload.command, 'echo test')
+
+  await harness.orchestrator.stop()
+  await fs.rm(harness.tmpDir, { recursive: true, force: true })
+})
+
+test('approval requests move tasks into waiting until a decision resumes execution', async () => {
+  const harness = await createHarness()
+
+  const dispatch = await harness.orchestrator.dispatchTask('sessionApproval', 'agentB', {
+    title: 'Run gated validation',
+    prompt: 'Run gated validation.'
+  })
+
+  await harness.orchestrator.handleServerRequest({
+    id: 'approval_req_1',
+    method: 'item/commandExecution/requestApproval',
+    params: {
+      threadId: dispatch.threadId,
+      turnId: dispatch.turnId,
+      command: '/bin/zsh -lc "npm test"',
+      cwd: '/tmp',
+      availableDecisions: ['accept', 'cancel']
+    }
+  })
+
+  let snapshot = harness.orchestrator.sessionStore.getSessionSnapshot('sessionApproval')
+  let task = snapshot.tasks.find((entry) => entry.id === dispatch.taskId)
+  let agent = snapshot.agents.find((entry) => entry.id === 'agentB')
+
+  assert.equal(task?.status, 'waiting')
+  assert.equal(agent?.status, 'waiting')
+  assert.equal(agent?.currentTask, 'Run gated validation')
+  assert.equal(harness.events.find((event) => event.type === 'approval_required')?.payload?.command, '/bin/zsh -lc "npm test"')
+
+  await harness.orchestrator.respondApproval('sessionApproval', 'agentB', 'approval_req_1', 'accept')
+
+  snapshot = harness.orchestrator.sessionStore.getSessionSnapshot('sessionApproval')
+  task = snapshot.tasks.find((entry) => entry.id === dispatch.taskId)
+  agent = snapshot.agents.find((entry) => entry.id === 'agentB')
+
+  assert.equal(task?.status, 'executing')
+  assert.equal(agent?.status, 'working')
+  assert.deepEqual(harness.orchestrator.client.responses.at(-1), {
+    requestId: 'approval_req_1',
+    payload: {
+      decision: 'accept'
+    }
+  })
+
+  await harness.orchestrator.stop()
+  await fs.rm(harness.tmpDir, { recursive: true, force: true })
+})
+
+test('approval cancel decision keeps task paused instead of resuming execution', async () => {
+  const harness = await createHarness()
+
+  const dispatch = await harness.orchestrator.dispatchTask('sessionApprovalCancel', 'agentB', {
+    title: 'Run gated validation',
+    prompt: 'Run gated validation.'
+  })
+
+  await harness.orchestrator.handleServerRequest({
+    id: 'approval_req_cancel',
+    method: 'item/commandExecution/requestApproval',
+    params: {
+      threadId: dispatch.threadId,
+      turnId: dispatch.turnId,
+      command: '/bin/zsh -lc "npm test"',
+      cwd: '/tmp',
+      availableDecisions: ['accept', 'cancel']
+    }
+  })
+
+  await harness.orchestrator.respondApproval('sessionApprovalCancel', 'agentB', 'approval_req_cancel', 'cancel')
+
+  const snapshot = harness.orchestrator.sessionStore.getSessionSnapshot('sessionApprovalCancel')
+  const task = snapshot.tasks.find((entry) => entry.id === dispatch.taskId)
+  const agent = snapshot.agents.find((entry) => entry.id === 'agentB')
+
+  assert.equal(task?.status, 'waiting')
+  assert.equal(agent?.status, 'waiting')
+  assert.deepEqual(harness.orchestrator.client.responses.at(-1), {
+    requestId: 'approval_req_cancel',
+    payload: {
+      decision: 'cancel'
+    }
+  })
 
   await harness.orchestrator.stop()
   await fs.rm(harness.tmpDir, { recursive: true, force: true })

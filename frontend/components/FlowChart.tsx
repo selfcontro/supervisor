@@ -114,6 +114,7 @@ export default function FlowChart({ agents, tasks, logs, selectedAgentId = null,
     const coordinator = agents.find((agent) => agent.id === 'agent-main')
     const workflowGroups = groupWorkflowAgents(agents)
     const nextEdges: Edge[] = []
+    const edgeType = 'default'
 
     workflowGroups.forEach((group: FlowAgent[]) => {
       if (group.length === 0) {
@@ -129,7 +130,7 @@ export default function FlowChart({ agents, tasks, logs, selectedAgentId = null,
           id: `${coordinator.id}->${breakdownAgent.id}`,
           source: coordinator.id,
           target: breakdownAgent.id,
-          type: 'default',
+          type: edgeType,
           animated: active,
           style: { stroke: 'rgba(56,189,248,0.82)', strokeWidth: 2 },
         })
@@ -141,7 +142,7 @@ export default function FlowChart({ agents, tasks, logs, selectedAgentId = null,
             id: `${coordinator.id}->${workerAgent.id}`,
             source: coordinator.id,
             target: workerAgent.id,
-            type: 'default',
+            type: edgeType,
             animated: active,
             style: { stroke: 'rgba(56,189,248,0.82)', strokeWidth: 2 },
           })
@@ -154,7 +155,7 @@ export default function FlowChart({ agents, tasks, logs, selectedAgentId = null,
             id: `${breakdownAgent.id}->${workerAgent.id}`,
             source: breakdownAgent.id,
             target: workerAgent.id,
-            type: 'default',
+            type: edgeType,
             animated: active,
             style: {
               stroke: active ? 'rgba(56,189,248,0.82)' : 'rgba(148,163,184,0.3)',
@@ -168,7 +169,7 @@ export default function FlowChart({ agents, tasks, logs, selectedAgentId = null,
             id: `${workerAgent.id}->${reviewAgent.id}`,
             source: workerAgent.id,
             target: reviewAgent.id,
-            type: 'default',
+            type: edgeType,
             animated: active,
             style: {
               stroke: active ? 'rgba(56,189,248,0.82)' : 'rgba(148,163,184,0.3)',
@@ -183,7 +184,7 @@ export default function FlowChart({ agents, tasks, logs, selectedAgentId = null,
           id: `${breakdownAgent.id}->${reviewAgent.id}`,
           source: breakdownAgent.id,
           target: reviewAgent.id,
-          type: 'default',
+          type: edgeType,
           animated: active,
           style: {
             stroke: active ? 'rgba(56,189,248,0.82)' : 'rgba(148,163,184,0.3)',
@@ -246,11 +247,12 @@ function buildFlowNodes(
     const roleLabel = isCoordinator ? 'Main coordinator' : 'Workflow duty'
     const position = savedPositions?.get(agent.id) || defaultLayout[agent.id] || { x: 320, y: 220 }
     const progress = progressByAgent[agent.id]
-    const nodeWidth = isCoordinator ? 280 : isPrimary ? 296 : 236
+    const nodeWidth = isCoordinator ? 312 : isPrimary ? 336 : 272
     const titleSize = isCoordinator ? 'text-[17px]' : 'text-[18px]'
-    const taskTextMinHeight = isCoordinator ? 'min-h-[2rem]' : 'min-h-[2.5rem]'
-    const statusMaxWidth = isCoordinator ? 150 : 190
-    const detailClamp = 'line-clamp-1'
+    const titleMinHeight = isCoordinator ? 'min-h-[2.5rem]' : 'min-h-[2.8rem]'
+    const taskTextMinHeight = isCoordinator ? 'min-h-[2.6rem]' : 'min-h-[3rem]'
+    const statusMaxWidth = isCoordinator ? 176 : 220
+    const detailClamp = 'line-clamp-2'
 
     return {
       id: agent.id,
@@ -267,7 +269,7 @@ function buildFlowNodes(
                   {roleLabel}
                 </p>
                 <p
-                  className={`truncate font-semibold leading-[1.15] ${titleSize}`}
+                  className={`line-clamp-2 ${titleMinHeight} font-semibold leading-[1.15] ${titleSize}`}
                   style={{ color: palette.text }}
                   title={agent.name}
                 >
@@ -313,10 +315,10 @@ function buildFlowNodes(
                     {progress.label}
                   </span>
                 </div>
-                <p className={`mt-0.5 text-[11px] leading-5 text-[rgba(191,219,254,0.72)] ${detailClamp}`} title={progress.detail || undefined}>
+                <p className={`mt-0.5 min-h-[3rem] text-[11px] leading-5 text-[rgba(191,219,254,0.72)] ${detailClamp}`} title={progress.detail || undefined}>
                   {progress.detail || 'Waiting for the next update.'}
                 </p>
-                <p className="mt-1 truncate rounded-md bg-[rgba(15,23,42,0.34)] px-2 py-1 font-mono text-[10px] text-[rgba(125,211,252,0.82)]" title={progress.latestCommand || undefined}>
+                <p className="mt-1 line-clamp-2 min-h-[3rem] rounded-md bg-[rgba(15,23,42,0.34)] px-2 py-1 font-mono text-[10px] leading-5 text-[rgba(125,211,252,0.82)]" title={progress.latestCommand || undefined}>
                   {progress.latestCommand || 'No command captured yet'}
                 </p>
               </div>
@@ -347,7 +349,7 @@ function buildFlowNodes(
           : `inset 0 1px 0 rgba(255,255,255,0.05), 0 10px 24px -22px rgba(15,23,42,0.85), ${palette.glow}`,
         padding: (isPrimary || isCoordinator) ? '18px 20px 16px' : '16px 18px 14px',
         minWidth: nodeWidth,
-        minHeight: progress ? (isCoordinator ? 192 : 210) : (isPrimary || isCoordinator) ? 148 : 128,
+        minHeight: progress ? (isCoordinator ? 228 : 276) : (isPrimary || isCoordinator) ? 168 : 148,
         display: 'flex',
         alignItems: 'stretch',
         justifyContent: 'stretch',

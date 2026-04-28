@@ -62,7 +62,7 @@ test('classifyWorkspaceLoadFailure marks failed fetches against localhost as loc
       message: 'Failed to fetch',
     },
     {
-      NEXT_PUBLIC_API_URL: 'http://127.0.0.1:3101',
+      NEXT_PUBLIC_API_URL: 'http://127.0.0.1:3001',
     }
   )
 
@@ -87,6 +87,11 @@ test('resolveBrowserApiUrl prefers saved browser override over env defaults', ()
   saveBrowserBackendOverride(
     {
       localStorage,
+      location: {
+        protocol: 'https:',
+        hostname: 'supervisor-eta.vercel.app',
+        port: '',
+      },
     },
     'http://127.0.0.1:4312/'
   )
@@ -94,6 +99,11 @@ test('resolveBrowserApiUrl prefers saved browser override over env defaults', ()
   const apiUrl = resolveBrowserApiUrl(
     {
       localStorage,
+      location: {
+        protocol: 'https:',
+        hostname: 'supervisor-eta.vercel.app',
+        port: '',
+      },
     },
     {
       NEXT_PUBLIC_API_URL: 'https://api.example.com',
@@ -108,6 +118,73 @@ test('resolveBrowserWsUrl derives websocket url from saved browser override', ()
   saveBrowserBackendOverride(
     {
       localStorage,
+      location: {
+        protocol: 'https:',
+        hostname: 'supervisor-eta.vercel.app',
+        port: '',
+      },
+    },
+    'http://127.0.0.1:4312/'
+  )
+
+  const wsUrl = resolveBrowserWsUrl(
+    {
+      localStorage,
+      location: {
+        protocol: 'https:',
+        hostname: 'supervisor-eta.vercel.app',
+        port: '',
+      },
+    },
+    {
+      NEXT_PUBLIC_WS_URL: 'wss://api.example.com',
+    }
+  )
+
+  assert.equal(wsUrl, 'ws://127.0.0.1:4312')
+})
+
+test('resolveBrowserApiUrl ignores legacy 3101 override when env explicitly points elsewhere', () => {
+  const localStorage = createStorage()
+  saveBrowserBackendOverride(
+    {
+      localStorage,
+      location: {
+        protocol: 'https:',
+        hostname: 'supervisor-eta.vercel.app',
+        port: '',
+      },
+    },
+    'http://127.0.0.1:3101/'
+  )
+
+  const apiUrl = resolveBrowserApiUrl(
+    {
+      localStorage,
+      location: {
+        protocol: 'https:',
+        hostname: 'supervisor-eta.vercel.app',
+        port: '',
+      },
+    },
+    {
+      NEXT_PUBLIC_API_URL: 'http://127.0.0.1:3001',
+    }
+  )
+
+  assert.equal(apiUrl, 'http://127.0.0.1:3001')
+})
+
+test('resolveBrowserWsUrl ignores legacy 3101 override when env explicitly points elsewhere', () => {
+  const localStorage = createStorage()
+  saveBrowserBackendOverride(
+    {
+      localStorage,
+      location: {
+        protocol: 'https:',
+        hostname: 'supervisor-eta.vercel.app',
+        port: '',
+      },
     },
     'http://127.0.0.1:3101/'
   )
@@ -115,13 +192,175 @@ test('resolveBrowserWsUrl derives websocket url from saved browser override', ()
   const wsUrl = resolveBrowserWsUrl(
     {
       localStorage,
+      location: {
+        protocol: 'https:',
+        hostname: 'supervisor-eta.vercel.app',
+        port: '',
+      },
+    },
+    {
+      NEXT_PUBLIC_API_URL: 'http://127.0.0.1:3001',
+      NEXT_PUBLIC_WS_URL: 'ws://127.0.0.1:3001',
+    }
+  )
+
+  assert.equal(wsUrl, 'ws://127.0.0.1:3001')
+})
+
+test('resolveBrowserApiUrl falls back to derived local backend when legacy 3101 override is stale', () => {
+  const localStorage = createStorage()
+  saveBrowserBackendOverride(
+    {
+      localStorage,
+      location: {
+        protocol: 'http:',
+        hostname: '127.0.0.1',
+        port: '3000',
+      },
+    },
+    'http://127.0.0.1:3101/'
+  )
+
+  const apiUrl = resolveBrowserApiUrl(
+    {
+      localStorage,
+      location: {
+        protocol: 'http:',
+        hostname: '127.0.0.1',
+        port: '3000',
+      },
+    },
+    {}
+  )
+
+  assert.equal(apiUrl, 'http://127.0.0.1:3001')
+})
+
+test('resolveBrowserWsUrl falls back to derived local backend websocket when legacy 3101 override is stale', () => {
+  const localStorage = createStorage()
+  saveBrowserBackendOverride(
+    {
+      localStorage,
+      location: {
+        protocol: 'http:',
+        hostname: '127.0.0.1',
+        port: '3000',
+      },
+    },
+    'http://127.0.0.1:3101/'
+  )
+
+  const wsUrl = resolveBrowserWsUrl(
+    {
+      localStorage,
+      location: {
+        protocol: 'http:',
+        hostname: '127.0.0.1',
+        port: '3000',
+      },
+    },
+    {}
+  )
+
+  assert.equal(wsUrl, 'ws://127.0.0.1:3001')
+})
+
+test('resolveBrowserApiUrl always prefers local backend on localhost pages regardless of saved override', () => {
+  const localStorage = createStorage()
+  saveBrowserBackendOverride(
+    {
+      localStorage,
+      location: {
+        protocol: 'http:',
+        hostname: '127.0.0.1',
+        port: '3010',
+      },
+    },
+    'https://stale.example.com'
+  )
+
+  const apiUrl = resolveBrowserApiUrl(
+    {
+      localStorage,
+      location: {
+        protocol: 'http:',
+        hostname: '127.0.0.1',
+        port: '3010',
+      },
+    },
+    {
+      NEXT_PUBLIC_API_URL: 'https://api.example.com',
+    }
+  )
+
+  assert.equal(apiUrl, 'http://127.0.0.1:3001')
+})
+
+test('resolveBrowserWsUrl always prefers local websocket on localhost pages regardless of saved override', () => {
+  const localStorage = createStorage()
+  saveBrowserBackendOverride(
+    {
+      localStorage,
+      location: {
+        protocol: 'http:',
+        hostname: 'localhost',
+        port: '3000',
+      },
+    },
+    'https://stale.example.com'
+  )
+
+  const wsUrl = resolveBrowserWsUrl(
+    {
+      localStorage,
+      location: {
+        protocol: 'http:',
+        hostname: 'localhost',
+        port: '3000',
+      },
     },
     {
       NEXT_PUBLIC_WS_URL: 'wss://api.example.com',
     }
   )
 
-  assert.equal(wsUrl, 'ws://127.0.0.1:3101')
+  assert.equal(wsUrl, 'ws://localhost:3001')
+})
+
+test('resolveBrowserApiUrl uses env local port when page is localhost', () => {
+  const apiUrl = resolveBrowserApiUrl(
+    {
+      location: {
+        protocol: 'http:',
+        hostname: '127.0.0.1',
+        port: '3000',
+      },
+      localStorage: createStorage(),
+    },
+    {
+      NEXT_PUBLIC_API_URL: 'http://127.0.0.1:3101',
+    }
+  )
+
+  assert.equal(apiUrl, 'http://127.0.0.1:3101')
+})
+
+test('resolveBrowserWsUrl uses env local port when page is localhost', () => {
+  const wsUrl = resolveBrowserWsUrl(
+    {
+      location: {
+        protocol: 'http:',
+        hostname: 'localhost',
+        port: '3000',
+      },
+      localStorage: createStorage(),
+    },
+    {
+      NEXT_PUBLIC_API_URL: 'http://127.0.0.1:3101',
+    }
+  )
+
+  assert.equal(wsUrl, 'ws://localhost:3101')
 })
 
 test('clearBrowserBackendOverride removes persisted override', () => {

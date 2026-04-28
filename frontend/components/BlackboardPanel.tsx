@@ -8,12 +8,15 @@ import {
   saveAgentBlackboard,
   saveSessionBlackboard,
 } from '@/lib/codexControlApi'
+import type { SessionLogEntry, SessionTask } from '@/src/types/session'
 
 interface BlackboardPanelProps {
   open: boolean
   sessionId: string
   selectedAgentId: string | null
   selectedAgentName?: string | null
+  tasks: SessionTask[]
+  logs: SessionLogEntry[]
   onClose: () => void
 }
 
@@ -37,6 +40,8 @@ export default function BlackboardPanel({
   sessionId,
   selectedAgentId,
   selectedAgentName,
+  tasks,
+  logs,
   onClose,
 }: BlackboardPanelProps) {
   const [activeTab, setActiveTab] = useState<BlackboardTab>('session')
@@ -105,6 +110,18 @@ export default function BlackboardPanel({
   const title = activeTab === 'session' ? 'Session Blackboard' : `${selectedAgentName || selectedAgentId} Blackboard`
 
   const structuredSections = useMemo(() => currentDoc?.sections || [], [currentDoc])
+  const proposedCandidates = useMemo(() => buildProposedMemoryCandidates(tasks, logs), [tasks, logs])
+  const proposedMemoryLines = useMemo(() => {
+    const proposedSection = sessionDoc?.sections.find((section) => section.id === 'proposed_memory')
+    if (!proposedSection || typeof proposedSection.content !== 'string') {
+      return []
+    }
+
+    return proposedSection.content
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+  }, [sessionDoc])
 
   function updateSection(sectionId: string, content: string) {
     if (!currentDoc) {
@@ -124,6 +141,52 @@ export default function BlackboardPanel({
 
     setAgentDoc({ ...currentDoc, sections: nextSections, markdown: nextMarkdown })
     setAgentMarkdownDraft(nextMarkdown)
+  }
+
+  function queueCandidateToProposedMemory(candidate: string) {
+    if (!sessionDoc) {
+      return
+    }
+
+    const proposedSection = sessionDoc.sections.find((section) => section.id === 'proposed_memory')
+    const currentContent = proposedSection?.content?.trim() || ''
+    const nextContent = currentContent ? `${currentContent}\n- ${candidate}` : `- ${candidate}`
+    updateSessionSection('proposed_memory', nextContent)
+    setActiveTab('session')
+  }
+
+  function promoteProposedLine(line: string) {
+    if (!sessionDoc) {
+      return
+    }
+
+    const shared = sessionDoc.sections.find((section) => section.id === 'shared_memory')?.content?.trim() || ''
+    const proposed = sessionDoc.sections.find((section) => section.id === 'proposed_memory')?.content || ''
+
+    const normalizedLine = line.trim()
+    const sharedNext = shared ? `${shared}\n${normalizedLine}` : normalizedLine
+    const proposedNext = proposed
+      .split('\n')
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .filter((entry) => entry !== normalizedLine)
+      .join('\n')
+
+    updateSessionSection('shared_memory', sharedNext)
+    updateSessionSection('proposed_memory', proposedNext)
+  }
+
+  function updateSessionSection(sectionId: string, content: string) {
+    if (!sessionDoc) {
+      return
+    }
+
+    const nextSections = sessionDoc.sections.map((section) =>
+      section.id === sectionId ? { ...section, content } : section
+    )
+    const nextMarkdown = sectionsToMarkdown('Session Blackboard', nextSections)
+    setSessionDoc({ ...sessionDoc, sections: nextSections, markdown: nextMarkdown })
+    setSessionMarkdownDraft(nextMarkdown)
   }
 
   async function handleSave() {
@@ -226,6 +289,61 @@ export default function BlackboardPanel({
         ) : currentDoc ? (
           mode === 'structured' ? (
             <div className="space-y-4">
+              {activeTab === 'session' && proposedCandidates.length > 0 ? (
+                <div className="rounded-2xl border border-[rgba(56,189,248,0.16)] bg-[rgba(8,47,73,0.18)] p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[rgba(125,211,252,0.78)]">
+                    Candidate Memory
+                  </p>
+                  <div className="mt-3 space-y-2">
+                    {proposedCandidates.map((candidate) => (
+                      <div
+                        key={candidate}
+                        className="flex items-start justify-between gap-3 rounded-xl border border-[rgba(148,163,184,0.1)] bg-[rgba(2,6,23,0.48)] px-3 py-2"
+                      >
+                        <p className="text-sm leading-6 text-[rgba(226,232,240,0.86)]">{candidate}</p>
+                        <button
+                          type="button"
+                          onClick={() => queueCandidateToProposedMemory(candidate)}
+                          className="shrink-0 rounded-full border border-[rgba(125,211,252,0.22)] bg-[rgba(8,47,73,0.4)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[rgba(191,219,254,0.9)] transition hover:border-[rgba(125,211,252,0.42)] hover:text-white"
+                        >
+                          Queue
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {activeTab === 'session'
+                ? proposedMemoryLines.length
+                  ? (
+                    <div className="rounded-2xl border border-[rgba(34,197,94,0.14)] bg-[rgba(20,83,45,0.14)] p-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[rgba(134,239,172,0.8)]">
+                        Promote to Shared Memory
+                      </p>
+                      <div className="mt-3 space-y-2">
+                        {proposedMemoryLines.map((line) => (
+                            <div
+                              key={line}
+                              className="flex items-start justify-between gap-3 rounded-xl border border-[rgba(148,163,184,0.1)] bg-[rgba(2,6,23,0.48)] px-3 py-2"
+                            >
+                              <p className="text-sm leading-6 text-[rgba(226,232,240,0.86)]">{line}</p>
+                              <button
+                                type="button"
+                                onClick={() => promoteProposedLine(line)}
+                                className="shrink-0 rounded-full border border-[rgba(134,239,172,0.22)] bg-[rgba(20,83,45,0.3)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[rgba(220,252,231,0.92)] transition hover:border-[rgba(134,239,172,0.42)] hover:text-white"
+                              >
+                                Promote
+                              </button>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  )
+                  : null
+                : null}
+
+              <div className="space-y-4">
               {structuredSections.map((section) => (
                 <div
                   key={section.id}
@@ -237,11 +355,12 @@ export default function BlackboardPanel({
                   <textarea
                     value={section.content}
                     onChange={(event) => updateSection(section.id, event.target.value)}
-                    rows={Math.max(3, section.content.split('\n').length || 1)}
+                    rows={Math.max(3, String(section.content || '').split('\n').length || 1)}
                     className="mt-2 min-h-[84px] w-full resize-y rounded-xl border border-[rgba(148,163,184,0.12)] bg-[rgba(2,6,23,0.64)] px-3 py-2 text-sm leading-6 text-[rgba(241,245,249,0.94)] outline-none placeholder:text-[rgba(148,163,184,0.5)]"
                   />
                 </div>
               ))}
+              </div>
             </div>
           ) : (
             <textarea
@@ -276,4 +395,33 @@ export default function BlackboardPanel({
       </div>
     </aside>
   )
+}
+
+function buildProposedMemoryCandidates(tasks: SessionTask[], logs: SessionLogEntry[]) {
+  const candidates = new Set<string>()
+
+  tasks
+    .filter((task) => !task.parentTaskId)
+    .slice()
+    .sort((left, right) => new Date(right.updatedAt || right.createdAt).getTime() - new Date(left.updatedAt || left.createdAt).getTime())
+    .slice(0, 4)
+    .forEach((task) => {
+      if (task.status === 'completed' || task.status === 'awaiting_finish') {
+        candidates.add(`Task outcome: "${task.description}" reached ${task.status}.`)
+      } else if (task.status === 'failed' || task.status === 'error' || task.status === 'interrupted') {
+        candidates.add(`Task issue: "${task.description}" ended as ${task.status}.`)
+      }
+    })
+
+  logs
+    .slice()
+    .sort((left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime())
+    .slice(0, 12)
+    .forEach((log) => {
+      if (log.level === 'error') {
+        candidates.add(`Error note: ${log.message}`)
+      }
+    })
+
+  return Array.from(candidates).slice(0, 6)
 }

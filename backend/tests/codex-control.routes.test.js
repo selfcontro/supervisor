@@ -9,6 +9,8 @@ function createFakeOrchestrator() {
   return {
     started: true,
     teamCalls: [],
+    savedSessionBlackboards: [],
+    savedAgentBlackboards: [],
     listAgents(sessionId) {
       return [{ sessionId, agentId: 'agent-main', state: 'idle' }]
     },
@@ -41,16 +43,56 @@ function createFakeOrchestrator() {
       return { ok: true }
     },
     async getSessionBlackboard(sessionId) {
-      return { sessionId, eventCount: 2, tasks: [] }
+      return {
+        sessionId,
+        scope: 'session',
+        markdown: '# Session Blackboard\n\n## Objective\n\nShip feature',
+        sections: [{ id: 'objective', title: 'Objective', content: 'Ship feature' }],
+        updatedAt: '2026-04-24T00:00:00.000Z',
+        source: 'materialized'
+      }
     },
     async getSessionMarkdown(sessionId) {
       return `# Session Blackboard: ${sessionId}`
     },
+    async saveSessionBlackboard(sessionId, payload) {
+      this.savedSessionBlackboards.push({ sessionId, payload })
+      return {
+        sessionId,
+        scope: 'session',
+        markdown: payload.markdown,
+        sections: [{ id: 'objective', title: 'Objective', content: 'Updated goal' }],
+        updatedAt: '2026-04-24T00:00:00.000Z',
+        source: 'user',
+        version: 1
+      }
+    },
     async getAgentBlackboard(sessionId, agentId) {
-      return { sessionId, agentId, eventCount: 1, events: [] }
+      return {
+        sessionId,
+        agentId,
+        scope: 'agent',
+        markdown: '# Agent Blackboard\n\n## Findings\n\nDone',
+        sections: [{ id: 'findings', title: 'Findings', content: 'Done' }],
+        updatedAt: '2026-04-24T00:00:00.000Z',
+        source: 'materialized'
+      }
     },
     async getAgentMarkdown(sessionId, agentId) {
       return `# Agent Blackboard: ${agentId} in ${sessionId}`
+    },
+    async saveAgentBlackboard(sessionId, agentId, payload) {
+      this.savedAgentBlackboards.push({ sessionId, agentId, payload })
+      return {
+        sessionId,
+        agentId,
+        scope: 'agent',
+        markdown: payload.markdown,
+        sections: [{ id: 'findings', title: 'Findings', content: 'Updated local note' }],
+        updatedAt: '2026-04-24T00:00:00.000Z',
+        source: 'user',
+        version: 1
+      }
     }
   }
 }
@@ -141,6 +183,33 @@ test('serves codex control routes when orchestrator is present', async () => {
     assert.equal(markdownResponse.status, 200)
     const markdownText = await markdownResponse.text()
     assert.match(markdownText, /Session Blackboard/)
+
+    const sessionBlackboardResponse = await fetch(`${base}/api/codex-control/sessions/s1/blackboard`)
+    assert.equal(sessionBlackboardResponse.status, 200)
+    const sessionBlackboardPayload = await sessionBlackboardResponse.json()
+    assert.equal(sessionBlackboardPayload.sections[0].id, 'objective')
+
+    const saveSessionResponse = await fetch(`${base}/api/codex-control/sessions/s1/blackboard`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        markdown: '# Session Blackboard\n\n## Objective\n\nUpdated goal'
+      })
+    })
+    assert.equal(saveSessionResponse.status, 200)
+    const savedSessionPayload = await saveSessionResponse.json()
+    assert.equal(savedSessionPayload.source, 'user')
+
+    const saveAgentResponse = await fetch(`${base}/api/codex-control/sessions/s1/agents/agent-main/blackboard`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        markdown: '# Agent Blackboard\n\n## Findings\n\nUpdated local note'
+      })
+    })
+    assert.equal(saveAgentResponse.status, 200)
+    const savedAgentPayload = await saveAgentResponse.json()
+    assert.equal(savedAgentPayload.scope, 'agent')
   })
 })
 

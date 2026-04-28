@@ -48,14 +48,14 @@ OPENAI_API_KEY=your_api_key_here
 # Optional Codex binary/path control:
 # CODEX_BIN=codex
 # CODEX_CWD=/absolute/path/to/workspace
-PORT=3001
+PORT=3101
 ```
 
 Frontend: `frontend/.env.local`
 
 ```env
-NEXT_PUBLIC_API_URL=http://127.0.0.1:3001
-NEXT_PUBLIC_WS_URL=ws://127.0.0.1:3001
+NEXT_PUBLIC_API_URL=http://127.0.0.1:3101
+NEXT_PUBLIC_WS_URL=ws://127.0.0.1:3101
 ```
 
 ### Start backend
@@ -65,7 +65,7 @@ cd backend
 npm start
 ```
 
-Backend listens on `http://127.0.0.1:3001`.
+Backend listens on `http://127.0.0.1:3101`.
 
 ### Start local bridge for the Vercel frontend
 
@@ -77,14 +77,14 @@ npm run bridge
 Expected local bridge checks:
 
 ```bash
-curl http://127.0.0.1:3001/health
-curl http://127.0.0.1:3001/api/sessions/default
+curl http://127.0.0.1:3101/health
+curl http://127.0.0.1:3101/api/sessions/default
 ```
 
 The bridge also exposes:
 
 ```text
-ws://127.0.0.1:3001/ws
+ws://127.0.0.1:3101/ws
 ```
 
 ### Start frontend
@@ -107,7 +107,7 @@ Public frontend flow:
 - Deploy `frontend` to Vercel
 - Open `/connect-local-codex`
 - Start the local bridge with `cd backend && npm run bridge`
-- Save `http://127.0.0.1:3001` as the browser endpoint override
+- Save `http://127.0.0.1:3101` as the browser endpoint override
 - Open `/workspace/default`
 
 ## Main Routes

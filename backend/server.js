@@ -2,6 +2,8 @@ require('dotenv').config()
 const express = require('express')
 const http = require('http')
 const cors = require('cors')
+const fs = require('fs')
+const path = require('path')
 const { WebSocketServer } = require('ws')
 const agentsRouter = require('./routes/agents')
 const tasksRouter = require('./routes/tasks')
@@ -18,7 +20,7 @@ const { clearAllTaskTimeouts } = require('./routes/tasks')
 
 function createServer(options = {}) {
   const {
-    port = Number(process.env.PORT) || 3001,
+    port = Number(process.env.PORT) || 3101,
     host = process.env.HOST || '0.0.0.0',
     startProcessing = true
   } = options
@@ -109,19 +111,29 @@ function createServer(options = {}) {
   app.use('/api/layout-overlap-verification', layoutOverlapVerificationRouter)
 
   app.get('/health', (req, res) => {
-    const apiKeyConfigured = Boolean(process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY)
+    const authState = resolveHealthAuthState({
+      env: process.env,
+      codexControlReady: codexOrchestrator.started
+    })
+    const codexInstalled = isExecutableAvailable(process.env.CODEX_BIN || 'codex', process.env.PATH)
     const address = server.address()
     const effectivePort = typeof address === 'object' && address ? address.port : port
     const effectiveHost = host === '0.0.0.0' ? '127.0.0.1' : host
     const wsUrl = `ws://${effectiveHost}:${effectivePort}/ws`
     const httpUrl = `http://${effectiveHost}:${effectivePort}`
+    const appServerStatus = codexOrchestrator.started
+      ? 'ready'
+      : codexInstalled
+        ? 'stopped'
+        : 'missing'
+
     res.json({
       status: 'ok',
       timestamp: new Date().toISOString(),
       sessions: sessionStore.getSessionIds().length,
       defaultSessionAgents: sessionStore.getAgents(DEFAULT_SESSION_ID).length,
       codexControl: codexOrchestrator.started ? 'ready' : 'starting',
-      codexApiKeyConfigured: apiKeyConfigured,
+      codexApiKeyConfigured: authState.configured,
       codexBin: process.env.CODEX_BIN || 'codex',
       uptime: process.uptime(),
       bridge: {
@@ -138,11 +150,14 @@ function createServer(options = {}) {
           commandLogs: true
         },
         auth: {
-          configured: apiKeyConfigured
+          configured: authState.configured,
+          source: authState.source
         },
         runtime: {
+          codexInstalled,
           codexControl: codexOrchestrator.started ? 'ready' : 'starting',
-          codexBin: process.env.CODEX_BIN || 'codex'
+          codexBin: process.env.CODEX_BIN || 'codex',
+          appServer: appServerStatus
         }
       }
     })
@@ -317,6 +332,56 @@ function createServer(options = {}) {
   }
 }
 
+function detectAuthState(env = process.env) {
+  if (env.OPENAI_API_KEY) {
+    return { configured: true, source: 'OPENAI_API_KEY' }
+  }
+
+  if (env.CODEX_API_KEY) {
+    return { configured: true, source: 'CODEX_API_KEY' }
+  }
+
+  return { configured: false, source: 'missing' }
+}
+
+function resolveHealthAuthState({ env = process.env, codexControlReady = false } = {}) {
+  const authState = detectAuthState(env)
+  if (authState.configured) {
+    return authState
+  }
+
+  if (codexControlReady) {
+    return { configured: true, source: 'codex_login' }
+  }
+
+  return authState
+}
+
+function isExecutableAvailable(command, pathValue = process.env.PATH || '') {
+  if (!command || typeof command !== 'string') {
+    return false
+  }
+
+  if (command.includes(path.sep)) {
+    return isExecutableFile(command)
+  }
+
+  const pathEntries = String(pathValue)
+    .split(path.delimiter)
+    .filter(Boolean)
+
+  return pathEntries.some((entry) => isExecutableFile(path.join(entry, command)))
+}
+
+function isExecutableFile(targetPath) {
+  try {
+    fs.accessSync(targetPath, fs.constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
 module.exports = { createServer }
 
 if (require.main === module) {
@@ -366,7 +431,77 @@ async function hydrateSessionStoreFromBlackboard({ sessionStore, blackboardStore
         })
       }
     }
+
+    reconcileHydratedSession(sessionStore, sessionId)
   }
+}
+
+function reconcileHydratedSession(sessionStore, sessionId) {
+  const now = new Date().toISOString()
+  const tasks = sessionStore.getTasks(sessionId)
+  const tasksById = new Map(tasks.map((task) => [task.id, task]))
+  const interruptibleStatuses = new Set(['pending', 'planning', 'reviewing', 'executing'])
+  const interruptedTaskTitles = new Set()
+  const waitingTaskTitles = new Set()
+
+  for (const task of tasks) {
+    if (!interruptibleStatuses.has(task.status)) {
+      continue
+    }
+
+    const childTasks = getHydratedChildTasks(task, tasksById)
+    const canAwaitFinish = childTasks.length > 0 && childTasks.every((childTask) => childTask.status === 'completed')
+
+    if (canAwaitFinish) {
+      waitingTaskTitles.add(task.description || '')
+      sessionStore.syncTask({
+        ...task,
+        status: 'awaiting_finish',
+        updatedAt: now,
+        subTasks: childTasks.map((childTask) => childTask.id)
+      })
+      continue
+    }
+
+    interruptedTaskTitles.add(task.description || '')
+    sessionStore.syncTask({
+      ...task,
+      status: 'interrupted',
+      updatedAt: now,
+      error: task.error || 'Recovered from persisted blackboard without an active runtime; marked interrupted on startup.'
+    })
+  }
+
+  const snapshot = sessionStore.getSessionSnapshot(sessionId)
+  for (const agent of snapshot.agents) {
+    if (agent.currentTask && waitingTaskTitles.has(agent.currentTask)) {
+      sessionStore.syncAgent(sessionId, {
+        ...agent,
+        status: 'waiting',
+        currentTask: agent.currentTask
+      })
+      continue
+    }
+
+    if (agent.currentTask && interruptedTaskTitles.has(agent.currentTask)) {
+      sessionStore.syncAgent(sessionId, {
+        ...agent,
+        status: 'idle',
+        currentTask: null
+      })
+    }
+  }
+}
+
+function getHydratedChildTasks(task, tasksById) {
+  if (!task || typeof task.id !== 'string') {
+    return []
+  }
+
+  const taskIdPrefix = `${task.id}:`
+  return Array.from(tasksById.values()).filter((candidate) => {
+    return typeof candidate.id === 'string' && candidate.id.startsWith(taskIdPrefix)
+  })
 }
 
 function mapBlackboardTaskStatus(status) {

@@ -299,7 +299,8 @@ class CodexOrchestrator {
 
   findLiveWorkflowTask(sessionId) {
     const snapshot = this.sessionStore.getSessionSnapshot(sessionId)
-    return (snapshot.tasks || []).find((task) => {
+    const tasks = Array.isArray(snapshot?.tasks) ? snapshot.tasks : []
+    return tasks.find((task) => {
       if (task.parentTaskId) {
         return false
       }
@@ -917,6 +918,9 @@ class CodexOrchestrator {
       throw new Error('Approval request not found')
     }
 
+    if (isApprovalAcceptedDecision(decision)) {
+      this.resumeTaskAfterApproval(sessionId, agentId, pending.task)
+    }
     this.client.respond(requestId, {
       decision
     })
@@ -948,18 +952,11 @@ class CodexOrchestrator {
   }
 
   async getSessionBlackboard(sessionId) {
-    return this.blackboard.getSessionSummary(sessionId)
+    return this.blackboard.getSessionDocument(sessionId)
   }
 
   async getAgentBlackboard(sessionId, agentId) {
-    const events = await this.blackboard.getAgentEvents(sessionId, agentId)
-    return {
-      sessionId,
-      agentId,
-      eventCount: events.length,
-      latestEventAt: events.length ? events[events.length - 1].ts : null,
-      events
-    }
+    return this.blackboard.getAgentDocument(sessionId, agentId)
   }
 
   async getSessionMarkdown(sessionId) {
@@ -970,6 +967,14 @@ class CodexOrchestrator {
   async getAgentMarkdown(sessionId, agentId) {
     await this.blackboard.materializeAgentMarkdown(sessionId, agentId)
     return this.blackboard.readAgentMarkdown(sessionId, agentId)
+  }
+
+  async saveSessionBlackboard(sessionId, payload) {
+    return this.blackboard.saveSessionDocument(sessionId, payload)
+  }
+
+  async saveAgentBlackboard(sessionId, agentId, payload) {
+    return this.blackboard.saveAgentDocument(sessionId, agentId, payload)
   }
 
   async handleNotification(message) {
@@ -1171,6 +1176,7 @@ class CodexOrchestrator {
     }
 
     this.registry.addPendingApproval(agent.sessionId, agent.agentId, approval)
+    this.pauseTaskForApproval(agent.sessionId, agent.agentId, task)
 
     await this.blackboard.appendEvent({
       sessionId: agent.sessionId,
@@ -1204,6 +1210,9 @@ class CodexOrchestrator {
     }
 
     const decision = chooseDecision(availableDecisions, this.autoApprovalMode)
+    if (isApprovalAcceptedDecision(decision)) {
+      this.resumeTaskAfterApproval(agent.sessionId, agent.agentId, approval.task)
+    }
     this.client.respond(message.id, {
       decision
     })
@@ -1486,6 +1495,50 @@ class CodexOrchestrator {
       workflow.stageDescriptors.set(stageId, buildDescriptorForStageId(stageId, workflow.prompt))
     }
   }
+
+  pauseTaskForApproval(sessionId, agentId, task) {
+    if (!task) {
+      return
+    }
+
+    const updatedTask = this.registry.updateTask(sessionId, agentId, task.taskId, {
+      status: 'waiting'
+    })
+    this.syncRuntimeTaskToSession(sessionId, agentId, updatedTask)
+    this.registry.updateAgentState(sessionId, agentId, 'waiting', task.turnId || null)
+
+    if (updatedTask) {
+      this.emitTaskUpdate(sessionId, task.taskId, {
+        status: updatedTask.status,
+        updatedAt: updatedTask.updatedAt,
+        agentId
+      })
+    }
+
+    this.emitAgentStatus(serializeAgent(this.registry.getAgent(sessionId, agentId)))
+  }
+
+  resumeTaskAfterApproval(sessionId, agentId, task) {
+    if (!task) {
+      return
+    }
+
+    const updatedTask = this.registry.updateTask(sessionId, agentId, task.taskId, {
+      status: 'executing'
+    })
+    this.syncRuntimeTaskToSession(sessionId, agentId, updatedTask)
+    this.registry.updateAgentState(sessionId, agentId, 'working', task.turnId || null)
+
+    if (updatedTask) {
+      this.emitTaskUpdate(sessionId, task.taskId, {
+        status: updatedTask.status,
+        updatedAt: updatedTask.updatedAt,
+        agentId
+      })
+    }
+
+    this.emitAgentStatus(serializeAgent(this.registry.getAgent(sessionId, agentId)))
+  }
 }
 
 function getWorkflowSubTaskIds(workflow) {
@@ -1666,6 +1719,7 @@ function inferWorkerDescriptors(workflow, breakdownResult = '') {
   const signalText = `${workflow.prompt}\n${breakdownResult}`.toLowerCase()
   const descriptors = []
   const seen = new Set()
+  const teamIntent = /\b(agent team|agent-team|multi-agent|swarm|orchestrat(e|ion)|workstreams?)\b/.test(signalText)
 
   const pushDescriptor = (stageId) => {
     if (!stageId || seen.has(stageId)) {
@@ -1695,6 +1749,16 @@ function inferWorkerDescriptors(workflow, breakdownResult = '') {
     pushDescriptor('handoff-notes')
   }
 
+  if (teamIntent && descriptors.length <= 1) {
+    if (!seen.has('ui-build') && !seen.has('backend-integration')) {
+      pushDescriptor('ui-build')
+      pushDescriptor('backend-integration')
+    }
+    if (!seen.has('validation-sweep')) {
+      pushDescriptor('validation-sweep')
+    }
+  }
+
   const longTask = /\b(parallel|swarm|multi|across|surface|surfaces|system|end-to-end)\b/.test(signalText)
     || workflow.prompt.trim().length > 140
 
@@ -1706,7 +1770,8 @@ function inferWorkerDescriptors(workflow, breakdownResult = '') {
     pushDescriptor('validation-sweep')
   }
 
-  if (longTask && descriptors.length >= 2 && !seen.has('primary-build') && !seen.has('handoff-notes')) {
+  const hasSplitImplementation = seen.has('ui-build') || seen.has('backend-integration')
+  if (longTask && descriptors.length >= 2 && !seen.has('primary-build') && !seen.has('handoff-notes') && !hasSplitImplementation) {
     pushDescriptor('primary-build')
   }
 
@@ -1922,6 +1987,22 @@ function chooseDecision(availableDecisions, mode) {
   }
 
   return availableDecisions[0]
+}
+
+function isApprovalAcceptedDecision(decision) {
+  if (typeof decision === 'string') {
+    const normalized = decision.trim().toLowerCase()
+    return normalized === 'accept' || normalized === 'approve' || normalized === 'allow'
+  }
+
+  if (decision && typeof decision === 'object') {
+    return Object.keys(decision).some((key) => {
+      const normalized = key.trim().toLowerCase()
+      return normalized.startsWith('accept') || normalized.startsWith('approve') || normalized.startsWith('allow')
+    })
+  }
+
+  return false
 }
 
 module.exports = { CodexOrchestrator }
