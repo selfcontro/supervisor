@@ -175,6 +175,45 @@ test('captures command execution from notifications', async () => {
   await fs.rm(harness.tmpDir, { recursive: true, force: true })
 })
 
+test('preserves manual session blackboard sections across event materialization', async () => {
+  const harness = await createHarness()
+
+  const dispatch = await harness.orchestrator.dispatchTask('sessionManual', 'agentA', {
+    title: 'Manual note persistence',
+    prompt: 'Record a manual note persistence check.'
+  })
+
+  const marker = 'HITL_BLACKBOARD_NOTE_CONFIRMED'
+  let saved = await harness.orchestrator.saveSessionBlackboard(
+    'sessionManual',
+    `# Session Blackboard: sessionManual\n\n## Human In The Loop Note\n${marker}`
+  )
+
+  assert.match(saved.markdown, new RegExp(marker))
+  assert.ok(saved.sections.some(section => section.title === 'Human In The Loop Note'))
+
+  await harness.orchestrator.handleNotification({
+    method: 'turn/completed',
+    params: {
+      threadId: dispatch.threadId,
+      turnId: dispatch.turnId,
+      turn: {
+        outputText: 'Done'
+      }
+    }
+  })
+
+  const markdown = await harness.orchestrator.getSessionMarkdown('sessionManual')
+  assert.match(markdown, /Manual note persistence/)
+  assert.match(markdown, new RegExp(marker))
+
+  saved = await harness.orchestrator.getSessionBlackboard('sessionManual')
+  assert.ok(saved.sections.some(section => section.title === 'Human In The Loop Note'))
+
+  await harness.orchestrator.stop()
+  await fs.rm(harness.tmpDir, { recursive: true, force: true })
+})
+
 test('renders swarm duty tasks in session blackboard markdown', async () => {
   const harness = await createHarness()
 

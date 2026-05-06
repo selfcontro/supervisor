@@ -1,4 +1,7 @@
 require('dotenv').config()
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
 const express = require('express')
 const http = require('http')
 const cors = require('cors')
@@ -109,7 +112,7 @@ function createServer(options = {}) {
   app.use('/api/layout-overlap-verification', layoutOverlapVerificationRouter)
 
   app.get('/health', (req, res) => {
-    const apiKeyConfigured = Boolean(process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY)
+    const authStatus = getCodexAuthStatus()
     const address = server.address()
     const effectivePort = typeof address === 'object' && address ? address.port : port
     const effectiveHost = host === '0.0.0.0' ? '127.0.0.1' : host
@@ -121,7 +124,7 @@ function createServer(options = {}) {
       sessions: sessionStore.getSessionIds().length,
       defaultSessionAgents: sessionStore.getAgents(DEFAULT_SESSION_ID).length,
       codexControl: codexOrchestrator.started ? 'ready' : 'starting',
-      codexApiKeyConfigured: apiKeyConfigured,
+      codexApiKeyConfigured: authStatus.configured,
       codexBin: process.env.CODEX_BIN || 'codex',
       uptime: process.uptime(),
       bridge: {
@@ -138,7 +141,8 @@ function createServer(options = {}) {
           commandLogs: true
         },
         auth: {
-          configured: apiKeyConfigured
+          configured: authStatus.configured,
+          source: authStatus.source
         },
         runtime: {
           codexControl: codexOrchestrator.started ? 'ready' : 'starting',
@@ -317,7 +321,41 @@ function createServer(options = {}) {
   }
 }
 
-module.exports = { createServer }
+function getCodexAuthStatus(env = process.env) {
+  if (env.OPENAI_API_KEY) {
+    return { configured: true, source: 'OPENAI_API_KEY' }
+  }
+
+  if (env.CODEX_API_KEY) {
+    return { configured: true, source: 'CODEX_API_KEY' }
+  }
+
+  const codexHome = env.CODEX_HOME || path.join(os.homedir(), '.codex')
+  const authPath = env.CODEX_AUTH_FILE || path.join(codexHome, 'auth.json')
+
+  try {
+    const auth = JSON.parse(fs.readFileSync(authPath, 'utf8'))
+    const hasLocalLogin = Boolean(
+      auth.OPENAI_API_KEY ||
+      auth.openaiApiKey ||
+      auth.api_key ||
+      (auth.tokens && typeof auth.tokens === 'object' && Object.keys(auth.tokens).length > 0)
+    )
+
+    if (hasLocalLogin) {
+      return {
+        configured: true,
+        source: 'Codex local login'
+      }
+    }
+  } catch {
+    return { configured: false, source: 'missing' }
+  }
+
+  return { configured: false, source: 'missing' }
+}
+
+module.exports = { createServer, getCodexAuthStatus }
 
 if (require.main === module) {
   const runtime = createServer()

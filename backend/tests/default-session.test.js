@@ -1,7 +1,10 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
 
-const { createServer } = require('../server')
+const { createServer, getCodexAuthStatus } = require('../server')
 
 test('default session snapshot is always available', async (t) => {
   const runtime = createServer({ port: 0, host: '127.0.0.1', startProcessing: false })
@@ -102,5 +105,36 @@ test('health endpoint exposes local bridge contract details', async (t) => {
   assert.equal(payload.bridge.capabilities.codexControl, true)
   assert.equal(payload.bridge.capabilities.realtime, true)
   assert.equal(typeof payload.bridge.auth.configured, 'boolean')
+  assert.equal(typeof payload.bridge.auth.source, 'string')
   assert.equal(typeof payload.bridge.runtime.codexControl, 'string')
+})
+
+test('auth status detects local Codex login file without exposing token values', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-codex-auth-'))
+  const authPath = path.join(tmpDir, 'auth.json')
+  fs.writeFileSync(authPath, JSON.stringify({
+    auth_mode: 'chatgpt',
+    tokens: {
+      access_token: 'secret-token'
+    }
+  }))
+
+  const status = getCodexAuthStatus({
+    CODEX_HOME: tmpDir
+  })
+
+  assert.deepEqual(status, {
+    configured: true,
+    source: 'Codex local login'
+  })
+  fs.rmSync(tmpDir, { recursive: true, force: true })
+})
+
+test('auth status prefers explicit API key environment', () => {
+  assert.deepEqual(getCodexAuthStatus({
+    OPENAI_API_KEY: 'secret-key'
+  }), {
+    configured: true,
+    source: 'OPENAI_API_KEY'
+  })
 })

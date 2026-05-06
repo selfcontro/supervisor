@@ -4,7 +4,7 @@ const assert = require('node:assert/strict')
 const { summarizeConnectFailure, summarizeHealthPayload } = require('./connectDiagnostics')
 
 test('summarizeHealthPayload marks codex and auth as ready when backend health is fully ready', () => {
-  const summary = summarizeHealthPayload('http://127.0.0.1:3101', {
+  const summary = summarizeHealthPayload('http://127.0.0.1:3001', {
     status: 'ok',
     codexControl: 'ready',
     codexApiKeyConfigured: true,
@@ -15,11 +15,11 @@ test('summarizeHealthPayload marks codex and auth as ready when backend health i
   assert.equal(summary.checks.http.status, 'ok')
   assert.equal(summary.checks.codex.status, 'ok')
   assert.equal(summary.checks.auth.status, 'ok')
-  assert.equal(summary.checks.websocket.url, 'ws://127.0.0.1:3101/ws')
+  assert.equal(summary.checks.websocket.url, 'ws://127.0.0.1:3001/ws')
 })
 
 test('summarizeHealthPayload marks codex as pending when app-server is starting', () => {
-  const summary = summarizeHealthPayload('http://127.0.0.1:3101', {
+  const summary = summarizeHealthPayload('http://127.0.0.1:3001', {
     status: 'ok',
     codexControl: 'starting',
     codexApiKeyConfigured: false,
@@ -41,7 +41,7 @@ test('summarizeHealthPayload handles invalid payloads defensively', () => {
 })
 
 test('summarizeHealthPayload prefers bridge transport and auth fields when present', () => {
-  const summary = summarizeHealthPayload('http://127.0.0.1:3101', {
+  const summary = summarizeHealthPayload('http://127.0.0.1:3001', {
     status: 'ok',
     bridge: {
       transport: {
@@ -63,7 +63,7 @@ test('summarizeHealthPayload prefers bridge transport and auth fields when prese
 })
 
 test('summarizeHealthPayload reports missing codex installation as an error', () => {
-  const summary = summarizeHealthPayload('http://127.0.0.1:3101', {
+  const summary = summarizeHealthPayload('http://127.0.0.1:3001', {
     status: 'ok',
     bridge: {
       auth: {
@@ -84,7 +84,7 @@ test('summarizeHealthPayload reports missing codex installation as an error', ()
 test('summarizeConnectFailure explains https-to-local bridge restrictions', () => {
   const failure = summarizeConnectFailure(
     new Error('Failed to fetch'),
-    'http://127.0.0.1:3101',
+    'http://127.0.0.1:3001',
     {
       location: {
         protocol: 'https:',

@@ -269,6 +269,22 @@ router.get('/sessions/:sessionId/blackboard/markdown', async (req, res) => {
   }
 })
 
+router.put('/sessions/:sessionId/blackboard', async (req, res) => {
+  try {
+    const orchestrator = getOrchestrator(req)
+    const { markdown } = req.body || {}
+
+    if (typeof markdown !== 'string' || !markdown.trim()) {
+      return res.status(400).json({ error: 'markdown is required' })
+    }
+
+    const saved = await orchestrator.saveSessionBlackboard(req.params.sessionId, markdown)
+    res.json(saved)
+  } catch (error) {
+    sendError(res, error)
+  }
+})
+
 router.get('/sessions/:sessionId/agents/:agentId/blackboard', async (req, res) => {
   try {
     const orchestrator = getOrchestrator(req)
@@ -284,6 +300,22 @@ router.get('/sessions/:sessionId/agents/:agentId/blackboard/markdown', async (re
     const orchestrator = getOrchestrator(req)
     const markdown = await orchestrator.getAgentMarkdown(req.params.sessionId, req.params.agentId)
     res.type('text/markdown').send(markdown)
+  } catch (error) {
+    sendError(res, error)
+  }
+})
+
+router.put('/sessions/:sessionId/agents/:agentId/blackboard', async (req, res) => {
+  try {
+    const orchestrator = getOrchestrator(req)
+    const { markdown } = req.body || {}
+
+    if (typeof markdown !== 'string' || !markdown.trim()) {
+      return res.status(400).json({ error: 'markdown is required' })
+    }
+
+    const saved = await orchestrator.saveAgentBlackboard(req.params.sessionId, req.params.agentId, markdown)
+    res.json(saved)
   } catch (error) {
     sendError(res, error)
   }

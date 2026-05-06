@@ -363,120 +363,6 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
     }
   }, [refreshKey, sessionId])
 
-  if (notFound) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-[#04070d] px-6 text-center">
-        <div>
-          <p className="text-xs uppercase tracking-[0.28em] text-[rgba(148,163,184,0.72)]">404</p>
-          <h1 className="mt-4 text-4xl font-semibold text-[#e2e8f0]">Session not found</h1>
-          <p className="mt-4 text-sm text-[rgba(148,163,184,0.78)]">
-            The workspace <span className="text-[#f8fafc]">{sessionId}</span> does not exist in the current backend runtime.
-          </p>
-          <div className="mt-8 flex items-center justify-center gap-3">
-            <Link
-              href="/"
-              className="rounded-full border border-[rgba(125,211,252,0.26)] px-4 py-2 text-sm text-[#cbd5e1] transition hover:border-[rgba(125,211,252,0.48)] hover:text-white"
-            >
-              Back home
-            </Link>
-            <button
-              onClick={() => setRefreshKey((current) => current + 1)}
-              className="rounded-full bg-[#0f172a] px-4 py-2 text-sm text-[#cbd5e1] transition hover:bg-[#162033] hover:text-white"
-            >
-              Retry
-            </button>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-[#04070d]">
-        <div className="h-10 w-10 rounded-full border border-[rgba(125,211,252,0.22)] border-t-[rgba(125,211,252,0.88)] animate-spin" />
-      </div>
-    )
-  }
-
-  if (error) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-[#04070d] px-6 text-center">
-        <div>
-          <p className="text-xs uppercase tracking-[0.28em] text-[rgba(248,113,113,0.72)]">Workspace error</p>
-          <h1 className="mt-4 text-4xl font-semibold text-[#e2e8f0]">
-            {showLocalCodexGuide ? 'Connect Local Codex' : 'Unable to load this session'}
-          </h1>
-          <p className="mt-4 max-w-xl text-sm leading-7 text-[rgba(148,163,184,0.82)]">{error}</p>
-          {showLocalCodexGuide ? (
-            <div className="mx-auto mt-6 max-w-2xl rounded-[28px] border border-[rgba(125,211,252,0.16)] bg-[rgba(8,15,28,0.9)] p-6 text-left shadow-[0_28px_120px_rgba(2,8,23,0.45)]">
-              <p className="text-xs uppercase tracking-[0.24em] text-[rgba(103,232,249,0.7)]">Public Frontend Mode</p>
-              <ol className="mt-4 space-y-3 text-sm leading-7 text-[rgba(226,232,240,0.84)]">
-                <li>1. Run your local Codex backend or bridge on <span className="text-white">port 3101</span>.</li>
-                <li>2. Make sure it exposes the session API and websocket endpoints used by this workspace.</li>
-                <li>3. If you are using your own local Codex bridge, point this frontend to that URL instead of <span className="text-white">localhost</span>.</li>
-                <li>4. Reload this page after the local runtime reports healthy.</li>
-              </ol>
-              <div className="mt-5 rounded-2xl border border-[rgba(148,163,184,0.14)] bg-[rgba(2,6,23,0.66)] px-4 py-3 font-mono text-xs leading-6 text-[rgba(148,163,184,0.9)]">
-                NEXT_PUBLIC_API_URL=http://127.0.0.1:3101
-                <br />
-                NEXT_PUBLIC_WS_URL=ws://127.0.0.1:3101
-              </div>
-              <div className="mt-5 flex items-center justify-center">
-                <Link
-                  href="/connect-local-codex"
-                  className="rounded-full bg-[rgba(103,232,249,0.14)] px-4 py-2 text-sm text-cyan-100 transition hover:bg-[rgba(103,232,249,0.24)]"
-                >
-                  Open Connection Guide
-                </Link>
-              </div>
-            </div>
-          ) : null}
-          <div className="mt-8 flex items-center justify-center gap-3">
-            <button
-              onClick={() => setRefreshKey((current) => current + 1)}
-              className="rounded-full bg-[#0f172a] px-4 py-2 text-sm text-[#cbd5e1] transition hover:bg-[#162033] hover:text-white"
-            >
-              Retry
-            </button>
-            <Link
-              href="/"
-              className="rounded-full border border-[rgba(125,211,252,0.26)] px-4 py-2 text-sm text-[#cbd5e1] transition hover:border-[rgba(125,211,252,0.48)] hover:text-white"
-            >
-              Back home
-            </Link>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  const rootTasks = tasks
-    .filter((task) => !task.parentTaskId)
-    .sort((left, right) => new Date(right.updatedAt || right.createdAt).getTime() - new Date(left.updatedAt || left.createdAt).getTime())
-    .slice(0, 8)
-  const recentTasks = tasks
-    .slice()
-    .sort((left, right) => new Date(right.updatedAt || right.createdAt).getTime() - new Date(left.updatedAt || left.createdAt).getTime())
-    .slice(0, 8)
-  const tasksById = new Map(tasks.map((task) => [task.id, task] as const))
-  const activeRootTask = tasks
-    .filter((task) => !task.parentTaskId && task.agentId === 'agent-main')
-    .sort((left, right) => new Date(right.updatedAt || right.createdAt).getTime() - new Date(left.updatedAt || left.createdAt).getTime())
-    .find((task) => !['completed', 'rejected', 'failed', 'error', 'interrupted'].includes(task.status)) || null
-
-  const statusTone: Record<string, string> = {
-    completed: 'bg-emerald-400',
-    awaiting_finish: 'bg-amber-300',
-    executing: 'bg-cyan-400',
-    planning: 'bg-sky-400',
-    reviewing: 'bg-violet-400',
-    waiting: 'bg-slate-300',
-    pending: 'bg-amber-300',
-    failed: 'bg-rose-400',
-    error: 'bg-rose-400',
-    interrupted: 'bg-orange-400',
-  }
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) || null
   const canInterruptSelectedAgent = Boolean(
     selectedAgent && ['working', 'waiting'].includes(selectedAgent.status)
@@ -552,7 +438,122 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
 
     window.addEventListener('keydown', handleGlobalKeydown)
     return () => window.removeEventListener('keydown', handleGlobalKeydown)
-  }, [canInterruptSelectedAgent, interruptingAgentId, selectedAgentId, sessionId, agents])
+  }, [canInterruptSelectedAgent, interruptingAgentId, selectedAgentId, sessionId])
+
+  if (notFound) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#04070d] px-6 text-center">
+        <div>
+          <p className="text-xs uppercase tracking-[0.28em] text-[rgba(148,163,184,0.72)]">404</p>
+          <h1 className="mt-4 text-4xl font-semibold text-[#e2e8f0]">Session not found</h1>
+          <p className="mt-4 text-sm text-[rgba(148,163,184,0.78)]">
+            The workspace <span className="text-[#f8fafc]">{sessionId}</span> does not exist in the current backend runtime.
+          </p>
+          <div className="mt-8 flex items-center justify-center gap-3">
+            <Link
+              href="/"
+              className="rounded-full border border-[rgba(125,211,252,0.26)] px-4 py-2 text-sm text-[#cbd5e1] transition hover:border-[rgba(125,211,252,0.48)] hover:text-white"
+            >
+              Back home
+            </Link>
+            <button
+              onClick={() => setRefreshKey((current) => current + 1)}
+              className="rounded-full bg-[#0f172a] px-4 py-2 text-sm text-[#cbd5e1] transition hover:bg-[#162033] hover:text-white"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#04070d]">
+        <div className="h-10 w-10 rounded-full border border-[rgba(125,211,252,0.22)] border-t-[rgba(125,211,252,0.88)] animate-spin" />
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#04070d] px-6 text-center">
+        <div>
+          <p className="text-xs uppercase tracking-[0.28em] text-[rgba(248,113,113,0.72)]">Workspace error</p>
+          <h1 className="mt-4 text-4xl font-semibold text-[#e2e8f0]">
+            {showLocalCodexGuide ? 'Connect Local Codex' : 'Unable to load this session'}
+          </h1>
+          <p className="mt-4 max-w-xl text-sm leading-7 text-[rgba(148,163,184,0.82)]">{error}</p>
+          {showLocalCodexGuide ? (
+            <div className="mx-auto mt-6 max-w-2xl rounded-[28px] border border-[rgba(125,211,252,0.16)] bg-[rgba(8,15,28,0.9)] p-6 text-left shadow-[0_28px_120px_rgba(2,8,23,0.45)]">
+              <p className="text-xs uppercase tracking-[0.24em] text-[rgba(103,232,249,0.7)]">Public Frontend Mode</p>
+              <ol className="mt-4 space-y-3 text-sm leading-7 text-[rgba(226,232,240,0.84)]">
+                <li>1. Run your local Codex backend or bridge on <span className="text-white">port 3001</span>.</li>
+                <li>2. Make sure it exposes the session API and websocket endpoints used by this workspace.</li>
+                <li>3. If you are using your own local Codex bridge, point this frontend to that URL instead of <span className="text-white">localhost</span>.</li>
+                <li>4. Reload this page after the local runtime reports healthy.</li>
+              </ol>
+              <div className="mt-5 rounded-2xl border border-[rgba(148,163,184,0.14)] bg-[rgba(2,6,23,0.66)] px-4 py-3 font-mono text-xs leading-6 text-[rgba(148,163,184,0.9)]">
+                NEXT_PUBLIC_API_URL=http://127.0.0.1:3001
+                <br />
+                NEXT_PUBLIC_WS_URL=ws://127.0.0.1:3001
+              </div>
+              <div className="mt-5 flex items-center justify-center">
+                <Link
+                  href="/connect-local-codex"
+                  className="rounded-full bg-[rgba(103,232,249,0.14)] px-4 py-2 text-sm text-cyan-100 transition hover:bg-[rgba(103,232,249,0.24)]"
+                >
+                  Open Connection Guide
+                </Link>
+              </div>
+            </div>
+          ) : null}
+          <div className="mt-8 flex items-center justify-center gap-3">
+            <button
+              onClick={() => setRefreshKey((current) => current + 1)}
+              className="rounded-full bg-[#0f172a] px-4 py-2 text-sm text-[#cbd5e1] transition hover:bg-[#162033] hover:text-white"
+            >
+              Retry
+            </button>
+            <Link
+              href="/"
+              className="rounded-full border border-[rgba(125,211,252,0.26)] px-4 py-2 text-sm text-[#cbd5e1] transition hover:border-[rgba(125,211,252,0.48)] hover:text-white"
+            >
+              Back home
+            </Link>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const rootTasks = tasks
+    .filter((task) => !task.parentTaskId)
+    .sort((left, right) => new Date(right.updatedAt || right.createdAt).getTime() - new Date(left.updatedAt || left.createdAt).getTime())
+    .slice(0, 8)
+  const recentTasks = tasks
+    .slice()
+    .sort((left, right) => new Date(right.updatedAt || right.createdAt).getTime() - new Date(left.updatedAt || left.createdAt).getTime())
+    .slice(0, 8)
+  const tasksById = new Map(tasks.map((task) => [task.id, task] as const))
+  const activeRootTask = tasks
+    .filter((task) => !task.parentTaskId && task.agentId === 'agent-main')
+    .sort((left, right) => new Date(right.updatedAt || right.createdAt).getTime() - new Date(left.updatedAt || left.createdAt).getTime())
+    .find((task) => !['completed', 'rejected', 'failed', 'error', 'interrupted'].includes(task.status)) || null
+
+  const statusTone: Record<string, string> = {
+    completed: 'bg-emerald-400',
+    awaiting_finish: 'bg-amber-300',
+    executing: 'bg-cyan-400',
+    planning: 'bg-sky-400',
+    reviewing: 'bg-violet-400',
+    waiting: 'bg-slate-300',
+    pending: 'bg-amber-300',
+    failed: 'bg-rose-400',
+    error: 'bg-rose-400',
+    interrupted: 'bg-orange-400',
+  }
 
   return (
     <main className="h-screen w-screen overflow-hidden bg-[#04070d]">

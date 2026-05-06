@@ -133,6 +133,8 @@ class BlackboardStore {
   async materializeSessionMarkdown(sessionId) {
     const summary = await this.getSessionSummary(sessionId)
     const checklistCards = buildWorkflowChecklistCards(summary.tasks)
+    const existingMarkdown = await this.readSessionMarkdown(sessionId)
+    const preservedSections = preserveManualSections(existingMarkdown, ['Tasks', 'Team Checklist Cards', 'Recent Events'])
     const lines = []
 
     lines.push(`# Session Blackboard: ${sessionId}`)
@@ -182,12 +184,19 @@ class BlackboardStore {
       }
     }
 
+    if (preservedSections.length > 0) {
+      lines.push('')
+      lines.push(...preservedSections)
+    }
+
     await fs.mkdir(path.dirname(this.sessionMarkdownPath(sessionId)), { recursive: true })
     await fs.writeFile(this.sessionMarkdownPath(sessionId), `${lines.join('\n')}\n`, 'utf8')
   }
 
   async materializeAgentMarkdown(sessionId, agentId) {
     const events = await this.getAgentEvents(sessionId, agentId)
+    const existingMarkdown = await this.readAgentMarkdown(sessionId, agentId)
+    const preservedSections = preserveManualSections(existingMarkdown, ['Timeline'])
     const lines = []
 
     lines.push(`# Agent Blackboard: ${agentId}`)
@@ -213,6 +222,11 @@ class BlackboardStore {
       }
     }
 
+    if (preservedSections.length > 0) {
+      lines.push('')
+      lines.push(...preservedSections)
+    }
+
     await fs.mkdir(path.dirname(this.agentMarkdownPath(sessionId, agentId)), { recursive: true })
     await fs.writeFile(this.agentMarkdownPath(sessionId, agentId), `${lines.join('\n')}\n`, 'utf8')
   }
@@ -223,6 +237,20 @@ class BlackboardStore {
 
   async readAgentMarkdown(sessionId, agentId) {
     return this.readFileSafe(this.agentMarkdownPath(sessionId, agentId))
+  }
+
+  async writeSessionMarkdown(sessionId, markdown) {
+    const filePath = this.sessionMarkdownPath(sessionId)
+    await fs.mkdir(path.dirname(filePath), { recursive: true })
+    await fs.writeFile(filePath, `${markdown.trimEnd()}\n`, 'utf8')
+    return this.readSessionMarkdown(sessionId)
+  }
+
+  async writeAgentMarkdown(sessionId, agentId, markdown) {
+    const filePath = this.agentMarkdownPath(sessionId, agentId)
+    await fs.mkdir(path.dirname(filePath), { recursive: true })
+    await fs.writeFile(filePath, `${markdown.trimEnd()}\n`, 'utf8')
+    return this.readAgentMarkdown(sessionId, agentId)
   }
 
   async readEvents(filePath, options = {}) {
@@ -353,6 +381,58 @@ function normalizeWorkflowStage(stageId) {
     return 'subagent'
   }
   return 'review'
+}
+
+function preserveManualSections(markdown, generatedTitles) {
+  if (typeof markdown !== 'string' || !markdown.trim()) {
+    return []
+  }
+
+  const generatedTitleSet = new Set(generatedTitles.map(title => title.toLowerCase()))
+  const lines = markdown.split(/\r?\n/)
+  const preserved = []
+  let current = null
+
+  for (const line of lines) {
+    const heading = line.match(/^##\s+(.+?)\s*$/)
+
+    if (heading) {
+      if (current && current.keep) {
+        preserved.push(...trimSectionLines(current.lines), '')
+      }
+
+      const title = heading[1].trim().toLowerCase()
+      current = {
+        keep: !generatedTitleSet.has(title),
+        lines: [line]
+      }
+      continue
+    }
+
+    if (current) {
+      current.lines.push(line)
+    }
+  }
+
+  if (current && current.keep) {
+    preserved.push(...trimSectionLines(current.lines), '')
+  }
+
+  while (preserved[preserved.length - 1] === '') {
+    preserved.pop()
+  }
+
+  return preserved
+}
+
+function trimSectionLines(lines) {
+  const trimmed = [...lines]
+
+  while (trimmed.length > 0 && !trimmed[trimmed.length - 1].trim()) {
+    trimmed.pop()
+  }
+
+  return trimmed
 }
 
 function previewPayload(payload, maxLength) {

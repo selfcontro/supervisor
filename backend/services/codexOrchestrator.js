@@ -948,14 +948,43 @@ class CodexOrchestrator {
   }
 
   async getSessionBlackboard(sessionId) {
-    return this.blackboard.getSessionSummary(sessionId)
+    const summary = await this.blackboard.getSessionSummary(sessionId)
+    let markdown = await this.blackboard.readSessionMarkdown(sessionId)
+
+    if (!markdown) {
+      await this.blackboard.materializeSessionMarkdown(sessionId)
+      markdown = await this.blackboard.readSessionMarkdown(sessionId)
+    }
+
+    return {
+      ...summary,
+      scope: 'session',
+      version: 1,
+      markdown,
+      sections: parseBlackboardSections(markdown),
+      updatedAt: summary.latestEventAt,
+      source: 'blackboard-store'
+    }
   }
 
   async getAgentBlackboard(sessionId, agentId) {
     const events = await this.blackboard.getAgentEvents(sessionId, agentId)
+    let markdown = await this.blackboard.readAgentMarkdown(sessionId, agentId)
+
+    if (!markdown) {
+      await this.blackboard.materializeAgentMarkdown(sessionId, agentId)
+      markdown = await this.blackboard.readAgentMarkdown(sessionId, agentId)
+    }
+
     return {
       sessionId,
       agentId,
+      scope: 'agent',
+      version: 1,
+      markdown,
+      sections: parseBlackboardSections(markdown),
+      updatedAt: events.length ? events[events.length - 1].ts : null,
+      source: 'blackboard-store',
       eventCount: events.length,
       latestEventAt: events.length ? events[events.length - 1].ts : null,
       events
@@ -963,13 +992,57 @@ class CodexOrchestrator {
   }
 
   async getSessionMarkdown(sessionId) {
-    await this.blackboard.materializeSessionMarkdown(sessionId)
-    return this.blackboard.readSessionMarkdown(sessionId)
+    let markdown = await this.blackboard.readSessionMarkdown(sessionId)
+    if (!markdown) {
+      await this.blackboard.materializeSessionMarkdown(sessionId)
+      markdown = await this.blackboard.readSessionMarkdown(sessionId)
+    }
+    return markdown
   }
 
   async getAgentMarkdown(sessionId, agentId) {
-    await this.blackboard.materializeAgentMarkdown(sessionId, agentId)
-    return this.blackboard.readAgentMarkdown(sessionId, agentId)
+    let markdown = await this.blackboard.readAgentMarkdown(sessionId, agentId)
+    if (!markdown) {
+      await this.blackboard.materializeAgentMarkdown(sessionId, agentId)
+      markdown = await this.blackboard.readAgentMarkdown(sessionId, agentId)
+    }
+    return markdown
+  }
+
+  async saveSessionBlackboard(sessionId, markdown) {
+    const normalizedMarkdown = normalizeBlackboardMarkdown(markdown)
+    const savedMarkdown = await this.blackboard.writeSessionMarkdown(sessionId, normalizedMarkdown)
+    const summary = await this.blackboard.getSessionSummary(sessionId)
+
+    return {
+      ...summary,
+      scope: 'session',
+      version: 1,
+      markdown: savedMarkdown,
+      sections: parseBlackboardSections(savedMarkdown),
+      updatedAt: new Date().toISOString(),
+      source: 'manual'
+    }
+  }
+
+  async saveAgentBlackboard(sessionId, agentId, markdown) {
+    const normalizedMarkdown = normalizeBlackboardMarkdown(markdown)
+    const savedMarkdown = await this.blackboard.writeAgentMarkdown(sessionId, agentId, normalizedMarkdown)
+    const events = await this.blackboard.getAgentEvents(sessionId, agentId)
+
+    return {
+      sessionId,
+      agentId,
+      scope: 'agent',
+      version: 1,
+      markdown: savedMarkdown,
+      sections: parseBlackboardSections(savedMarkdown),
+      updatedAt: new Date().toISOString(),
+      source: 'manual',
+      eventCount: events.length,
+      latestEventAt: events.length ? events[events.length - 1].ts : null,
+      events
+    }
   }
 
   async handleNotification(message) {
@@ -1922,6 +1995,65 @@ function chooseDecision(availableDecisions, mode) {
   }
 
   return availableDecisions[0]
+}
+
+function normalizeBlackboardMarkdown(markdown) {
+  if (typeof markdown !== 'string' || !markdown.trim()) {
+    throw new Error('Blackboard markdown is required')
+  }
+
+  return markdown.trim()
+}
+
+function parseBlackboardSections(markdown) {
+  if (typeof markdown !== 'string' || !markdown.trim()) {
+    return []
+  }
+
+  const sections = []
+  const lines = markdown.split(/\r?\n/)
+  let current = null
+
+  for (const line of lines) {
+    const heading = line.match(/^##\s+(.+?)\s*$/)
+
+    if (heading) {
+      current = {
+        id: slugifyBlackboardSection(heading[1], sections.length),
+        title: heading[1].trim(),
+        contentLines: []
+      }
+      sections.push(current)
+      continue
+    }
+
+    if (current) {
+      current.contentLines.push(line)
+    }
+  }
+
+  if (sections.length === 0) {
+    return [{
+      id: 'notes',
+      title: 'Notes',
+      content: markdown.trim()
+    }]
+  }
+
+  return sections.map(section => ({
+    id: section.id,
+    title: section.title,
+    content: section.contentLines.join('\n').trim()
+  }))
+}
+
+function slugifyBlackboardSection(title, index) {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+
+  return slug || `section-${index + 1}`
 }
 
 module.exports = { CodexOrchestrator }

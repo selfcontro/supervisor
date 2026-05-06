@@ -47,10 +47,48 @@ function createFakeOrchestrator() {
       return `# Session Blackboard: ${sessionId}`
     },
     async getAgentBlackboard(sessionId, agentId) {
-      return { sessionId, agentId, eventCount: 1, events: [] }
+      return {
+        sessionId,
+        agentId,
+        scope: 'agent',
+        version: 1,
+        markdown: `# Agent Blackboard: ${agentId} in ${sessionId}`,
+        sections: [{ id: 'timeline', title: 'Timeline', content: '_No events yet._' }],
+        updatedAt: null,
+        source: 'blackboard-store',
+        eventCount: 1,
+        events: []
+      }
     },
     async getAgentMarkdown(sessionId, agentId) {
       return `# Agent Blackboard: ${agentId} in ${sessionId}`
+    },
+    async saveSessionBlackboard(sessionId, markdown) {
+      return {
+        sessionId,
+        scope: 'session',
+        version: 1,
+        markdown,
+        sections: [{ id: 'human-check', title: 'Human Check', content: 'saved' }],
+        updatedAt: '2026-05-06T00:00:00.000Z',
+        source: 'manual',
+        eventCount: 2,
+        tasks: []
+      }
+    },
+    async saveAgentBlackboard(sessionId, agentId, markdown) {
+      return {
+        sessionId,
+        agentId,
+        scope: 'agent',
+        version: 1,
+        markdown,
+        sections: [{ id: 'human-check', title: 'Human Check', content: 'saved' }],
+        updatedAt: '2026-05-06T00:00:00.000Z',
+        source: 'manual',
+        eventCount: 1,
+        events: []
+      }
     }
   }
 }
@@ -141,6 +179,26 @@ test('serves codex control routes when orchestrator is present', async () => {
     assert.equal(markdownResponse.status, 200)
     const markdownText = await markdownResponse.text()
     assert.match(markdownText, /Session Blackboard/)
+
+    const saveSessionResponse = await fetch(`${base}/api/codex-control/sessions/s1/blackboard`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ markdown: '# Session Blackboard\n\n## Human Check\nsaved' })
+    })
+    assert.equal(saveSessionResponse.status, 200)
+    const saveSessionPayload = await saveSessionResponse.json()
+    assert.equal(saveSessionPayload.scope, 'session')
+    assert.match(saveSessionPayload.markdown, /Human Check/)
+
+    const saveAgentResponse = await fetch(`${base}/api/codex-control/sessions/s1/agents/agent-main/blackboard`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ markdown: '# Agent Blackboard\n\n## Human Check\nsaved' })
+    })
+    assert.equal(saveAgentResponse.status, 200)
+    const saveAgentPayload = await saveAgentResponse.json()
+    assert.equal(saveAgentPayload.agentId, 'agent-main')
+    assert.match(saveAgentPayload.markdown, /Human Check/)
   })
 })
 
