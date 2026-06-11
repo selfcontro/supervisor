@@ -1,13 +1,15 @@
 'use client'
 
 import Link from 'next/link'
-import { type FormEvent, useEffect, useRef, useState } from 'react'
+import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import BlackboardPanel from '@/components/BlackboardPanel'
 import DotField from '@/components/DotField'
 import FlowChart from '@/components/FlowChart'
+import SessionTimelinePanel from '@/components/SessionTimelinePanel'
 import { useTaskMonitor } from '@/hooks/useTaskMonitor'
 import { dispatchCodexTask, finishCodexTask, interruptCodexAgent } from '@/lib/codexControlApi'
 import { classifySessionSnapshotFailure, classifyWorkspaceLoadFailure } from '@/lib/runtimeConfig'
+import { buildSessionTimeline, filterSessionLogs } from '@/lib/sessionTimeline'
 import {
   SessionApiError,
   fetchSessionSnapshot,
@@ -44,6 +46,7 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [taskPanelOpen, setTaskPanelOpen] = useState(false)
   const [blackboardPanelOpen, setBlackboardPanelOpen] = useState(false)
+  const [timelinePanelOpen, setTimelinePanelOpen] = useState(false)
   const [prompt, setPrompt] = useState('')
   const [isSendingPrompt, setIsSendingPrompt] = useState(false)
   const [interruptingAgentId, setInterruptingAgentId] = useState<string | null>(null)
@@ -366,6 +369,23 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
   }, [refreshKey, sessionId])
 
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) || null
+  const selectedAgentTaskIds = useMemo(() => {
+    if (!selectedAgentId) {
+      return []
+    }
+
+    return tasks
+      .filter((task) => task.agentId === selectedAgentId)
+      .map((task) => task.id)
+  }, [selectedAgentId, tasks])
+  const timelineEvents = useMemo(() => buildSessionTimeline(tasks, logs, { limit: 80 }), [logs, tasks])
+  const selectedAgentLogs = useMemo(
+    () => filterSessionLogs(logs, {
+      agentId: selectedAgentId,
+      taskIds: selectedAgentTaskIds,
+    }).slice(0, 40),
+    [logs, selectedAgentId, selectedAgentTaskIds]
+  )
   const canInterruptSelectedAgent = Boolean(
     selectedAgent && ['working', 'waiting'].includes(selectedAgent.status)
   )
@@ -611,6 +631,13 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
         </button>
         <button
           type="button"
+          onClick={() => setTimelinePanelOpen((current) => !current)}
+          className="rounded-full border border-[rgba(148,163,184,0.14)] bg-[rgba(2,6,23,0.8)] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-[rgba(226,232,240,0.78)] backdrop-blur transition hover:border-[rgba(125,211,252,0.32)] hover:text-white"
+        >
+          Timeline {timelineEvents.length > 0 ? `· ${timelineEvents.length}` : ''}
+        </button>
+        <button
+          type="button"
           onClick={() => setTaskPanelOpen((current) => !current)}
           className="rounded-full border border-[rgba(148,163,184,0.14)] bg-[rgba(2,6,23,0.8)] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-[rgba(226,232,240,0.78)] backdrop-blur transition hover:border-[rgba(125,211,252,0.32)] hover:text-white"
         >
@@ -703,6 +730,15 @@ export default function AgentTeamWorkspace({ sessionId }: AgentTeamWorkspaceProp
               </div>
             )}
           </aside>
+        ) : null}
+
+        {timelinePanelOpen ? (
+          <SessionTimelinePanel
+            timeline={timelineEvents}
+            logs={selectedAgentLogs}
+            selectedAgentName={selectedAgent?.name || null}
+            onClose={() => setTimelinePanelOpen(false)}
+          />
         ) : null}
 
         {blackboardPanelOpen ? (
