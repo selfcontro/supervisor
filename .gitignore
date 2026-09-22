@@ -11,3 +11,4 @@ frontend/.env.local
 backend/backend/data/blackboard/sessions/
 .claude/settings.local.json
 CLAUDE.md
+jev_config.txt

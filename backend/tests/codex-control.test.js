@@ -267,6 +267,40 @@ test('approval cancel decision keeps task paused instead of resuming execution',
   await fs.rm(harness.tmpDir, { recursive: true, force: true })
 })
 
+test('approval click resolves numeric JSON-RPC ids passed as REST strings', async () => {
+  const harness = await createHarness()
+  harness.orchestrator.autoApprovalMode = 'manual'
+
+  const dispatch = await harness.orchestrator.dispatchTask('sessionApprovalNumeric', 'agentB', {
+    title: 'Run gated validation',
+    prompt: 'Run gated validation.'
+  })
+
+  // The real app-server sends numeric request ids; the frontend clicks
+  // through REST params, which always arrive as strings.
+  await harness.orchestrator.handleServerRequest({
+    id: 7,
+    method: 'item/commandExecution/requestApproval',
+    params: {
+      threadId: dispatch.threadId,
+      turnId: dispatch.turnId,
+      command: '/bin/zsh -lc "npm test"',
+      cwd: '/tmp',
+      availableDecisions: ['accept', 'cancel']
+    }
+  })
+
+  const result = await harness.orchestrator.respondApproval('sessionApprovalNumeric', 'agentB', '7', 'accept')
+
+  assert.equal(result.ok, true)
+  const last = harness.orchestrator.client.responses.at(-1)
+  assert.equal(last.requestId, 7)
+  assert.equal(typeof last.requestId, 'number')
+
+  await harness.orchestrator.stop()
+  await fs.rm(harness.tmpDir, { recursive: true, force: true })
+})
+
 test('renders swarm duty tasks in session blackboard markdown', async () => {
   const harness = await createHarness()
 
@@ -331,6 +365,37 @@ test('renders swarm duty tasks in session blackboard markdown', async () => {
   markdown = await harness.orchestrator.getSessionMarkdown('sessionC')
   assert.match(markdown, /Review approved/)
   assert.match(markdown, /quality-gate/)
+
+  await harness.orchestrator.stop()
+  await fs.rm(harness.tmpDir, { recursive: true, force: true })
+})
+
+test('create multiagent prompt expands into multi-stage workflow workers', async () => {
+  const harness = await createHarness()
+
+  const dispatch = await harness.orchestrator.dispatchTask('sessionMultiagent', 'agent-main', {
+    title: 'Create multiagent',
+    prompt: 'create multiagent'
+  })
+
+  const breakdownAgent = getWorkflowAgent(harness.orchestrator.registry, 'sessionMultiagent', dispatch.taskId, 'task-breakdown')
+  await harness.orchestrator.handleNotification({
+    method: 'turn/completed',
+    params: {
+      threadId: breakdownAgent.threadId,
+      turnId: breakdownAgent.activeTurnId,
+      turn: {
+        outputText: 'Plan ready'
+      }
+    }
+  })
+
+  const workerStageIds = harness.orchestrator
+    .listAgents('sessionMultiagent')
+    .filter((agent) => agent.workflowParentTaskId === dispatch.taskId && agent.stageId !== 'task-breakdown' && agent.stageId !== 'quality-gate')
+    .map((agent) => agent.stageId)
+
+  assert.deepEqual(workerStageIds, ['ui-build', 'backend-integration', 'validation-sweep'])
 
   await harness.orchestrator.stop()
   await fs.rm(harness.tmpDir, { recursive: true, force: true })

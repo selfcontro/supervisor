@@ -2,9 +2,12 @@ function buildWorkflowLayout(agents) {
   const layout = {}
   const coordinator = (agents || []).find((agent) => agent.id === 'agent-main')
   const workflowGroups = groupWorkflowAgents(agents || [])
-  const breakdownY = 348
-  const workerY = 792
-  const reviewY = 1196
+  // Keep each row clear of the row above it. Cards grow when a command stream
+  // or long task description is present, so these gaps leave room after
+  // hydration while keeping the full workflow readable in one viewport.
+  const breakdownY = 430
+  const workerY = 850
+  const reviewY = 1270
 
   if (coordinator) {
     layout[coordinator.id] = { x: 420, y: 28 }
