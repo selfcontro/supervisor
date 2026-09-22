@@ -16,6 +16,7 @@ const { CodexRpcClient } = require('./services/codexRpcClient')
 const { AgentRegistry } = require('./services/agentRegistry')
 const { BlackboardStore } = require('./services/blackboardStore')
 const { CodexOrchestrator } = require('./services/codexOrchestrator')
+const { JevOrchestrator } = require('./services/jevOrchestrator')
 const { clearAllTaskTimeouts } = require('./routes/tasks')
 
 function createServer(options = {}) {
@@ -39,7 +40,10 @@ function createServer(options = {}) {
     registry: agentRegistry,
     blackboard: blackboardStore,
     sessionStore,
-    broadcast
+    broadcast,
+    jev: new JevOrchestrator({
+      enabled: process.env.JEV_ENABLED !== 'false'
+    })
   })
   const clients = new Map()
   const intervals = []

@@ -1,6 +1,6 @@
 const BACKEND_OVERRIDE_STORAGE_KEY = 'supervisor.backendOverride'
 const LEGACY_LOCAL_BACKEND_URL = 'http://127.0.0.1:3101'
-const DEFAULT_LOCAL_BACKEND_URL = 'http://127.0.0.1:3001'
+const DEFAULT_LOCAL_BACKEND_URL = 'http://127.0.0.1:3101'
 
 function stripTrailingSlashes(value) {
   if (typeof value !== 'string') {
@@ -43,7 +43,7 @@ function resolveWsUrl(env = process.env) {
     return apiUrl
   }
 
-  return 'ws://127.0.0.1:3001'
+  return 'ws://127.0.0.1:3101'
 }
 
 function normalizeOverrideValue(value) {
@@ -134,7 +134,11 @@ function deriveBrowserLocalApiUrl(browser = globalThis?.window, env = process.en
 
   const scheme = protocol === 'https:' ? 'https:' : 'http:'
   const port = deriveLocalBackendPort(env)
-  return `${scheme}//${hostname}:${port}`
+  // Prefer the IPv4 loopback explicitly. Browsers can resolve `localhost` to
+  // ::1 while the bridge is listening on IPv4, which makes a healthy bridge
+  // look unreachable from a local Next.js page.
+  const localHost = hostname.toLowerCase() === 'localhost' ? '127.0.0.1' : hostname
+  return `${scheme}//${localHost}:${port}`
 }
 
 function deriveBrowserLocalWsUrl(browser = globalThis?.window, env = process.env) {

@@ -9,6 +9,7 @@ import {
   BackgroundVariant,
   Panel,
   useNodesState,
+  useReactFlow,
   type Edge,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
@@ -73,6 +74,7 @@ interface FlowChartProps {
   agents: FlowAgent[]
   tasks: SessionTask[]
   logs: SessionLogEntry[]
+  streams?: Record<string, { text: string }>
   selectedAgentId?: string | null
   onSelectAgent?: (agentId: string | null) => void
 }
@@ -86,14 +88,14 @@ function isPrimaryAgent(agentId: string) {
   return agentId === 'task-breakdown' || agentId === 'quality-gate'
 }
 
-export default function FlowChart({ agents, tasks, logs, selectedAgentId = null, onSelectAgent }: FlowChartProps) {
+export default function FlowChart({ agents, tasks, logs, streams = {}, selectedAgentId = null, onSelectAgent }: FlowChartProps) {
   const { buildAgentProgressMap } = agentProgressModule
   const { buildWorkflowLayout, groupWorkflowAgents, getWorkflowStageKind } = flowLayoutModule
   const progressByAgent = useMemo(
     () => buildAgentProgressMap(agents, tasks, logs) as Record<string, AgentProgress>,
     [agents, tasks, logs, buildAgentProgressMap]
   )
-  const [nodes, setNodes, onNodesChange] = useNodesState(buildFlowNodes(agents, progressByAgent, selectedAgentId))
+  const [nodes, setNodes, onNodesChange] = useNodesState(buildFlowNodes(agents, progressByAgent, selectedAgentId, undefined, streams))
 
   useEffect(() => {
     setNodes((currentNodes) => {
@@ -101,13 +103,13 @@ export default function FlowChart({ agents, tasks, logs, selectedAgentId = null,
         currentNodes.map((node) => [String(node.id), node.position] as const)
       )
 
-      return buildFlowNodes(agents, progressByAgent, selectedAgentId, savedPositions)
+      return buildFlowNodes(agents, progressByAgent, selectedAgentId, savedPositions, streams)
     })
-  }, [agents, progressByAgent, selectedAgentId, setNodes])
+  }, [agents, progressByAgent, selectedAgentId, setNodes, streams])
 
   const handleResetLayout = useCallback(() => {
-    setNodes(buildFlowNodes(agents, progressByAgent, selectedAgentId))
-  }, [agents, progressByAgent, selectedAgentId, setNodes])
+    setNodes(buildFlowNodes(agents, progressByAgent, selectedAgentId, undefined, streams))
+  }, [agents, progressByAgent, selectedAgentId, setNodes, streams])
 
   const edges = useMemo(() => {
     const active = agents.some((agent) => agent.status === 'working')
@@ -214,6 +216,7 @@ export default function FlowChart({ agents, tasks, logs, selectedAgentId = null,
         onNodeClick={(_, node) => onSelectAgent?.(String(node.id))}
         onPaneClick={() => onSelectAgent?.(null)}
       >
+        <FlowViewportController agentIds={agents.map((agent) => agent.id)} />
         <Panel position="top-right">
           <button
             type="button"
@@ -230,11 +233,27 @@ export default function FlowChart({ agents, tasks, logs, selectedAgentId = null,
   )
 }
 
+function FlowViewportController({ agentIds }: { agentIds: string[] }) {
+  const { fitView } = useReactFlow()
+  const signature = agentIds.join('|')
+
+  useEffect(() => {
+    // Nodes arrive after the initial session fetch. Fit again after that
+    // hydration so the first card is not clipped and late workflow cards do
+    // not render on top of the initial viewport.
+    const frame = window.requestAnimationFrame(() => fitView({ padding: 0.28, duration: 180 }))
+    return () => window.cancelAnimationFrame(frame)
+  }, [fitView, signature])
+
+  return null
+}
+
 function buildFlowNodes(
   agents: FlowAgent[],
   progressByAgent: Record<string, AgentProgress>,
   selectedAgentId: string | null,
-  savedPositions?: Map<string, FlowPosition>
+  savedPositions?: Map<string, FlowPosition>,
+  streamsByAgent?: Record<string, { text: string }>,
 ) {
   const { buildWorkflowLayout } = flowLayoutModule
   const defaultLayout = buildWorkflowLayout(agents) as Record<string, FlowPosition>
@@ -318,8 +337,10 @@ function buildFlowNodes(
                 <p className={`mt-0.5 min-h-[3rem] text-[11px] leading-5 text-[rgba(191,219,254,0.72)] ${detailClamp}`} title={progress.detail || undefined}>
                   {progress.detail || 'Waiting for the next update.'}
                 </p>
-                <p className="mt-1 line-clamp-2 min-h-[3rem] rounded-md bg-[rgba(15,23,42,0.34)] px-2 py-1 font-mono text-[10px] leading-5 text-[rgba(125,211,252,0.82)]" title={progress.latestCommand || undefined}>
-                  {progress.latestCommand || 'No command captured yet'}
+                <p className="mt-1 line-clamp-2 min-h-[3rem] rounded-md bg-[rgba(15,23,42,0.34)] px-2 py-1 font-mono text-[10px] leading-5 text-[rgba(125,211,252,0.82)]" title={streamsByAgent?.[agent.id]?.text || progress.latestCommand || undefined}>
+                  {streamsByAgent?.[agent.id]?.text
+                    ? `running… ${streamsByAgent[agent.id].text.slice(-120)}`
+                    : (progress.latestCommand || 'No command captured yet')}
                 </p>
               </div>
             ) : null}

@@ -18,11 +18,23 @@ interface TaskHistoryItem {
   result?: string
 }
 
+interface ToolHistoryItem {
+  id: string
+  timestamp: string
+  command: string
+  exitCode: number | null
+  durationMs: number | null
+  status: string | null
+  outputPreview: string | null
+  turnId: string | null
+}
+
 interface AgentDetailPanelProps {
   agent: Agent | null
   onClose: () => void
   logs?: LogEntry[]
   taskHistory?: TaskHistoryItem[]
+  toolHistory?: ToolHistoryItem[]
 }
 
 const statusConfig: Record<string, { color: string; bgColor: string }> = {
@@ -33,7 +45,7 @@ const statusConfig: Record<string, { color: string; bgColor: string }> = {
   done: { color: '#86efac', bgColor: 'rgba(34,197,94,0.2)' },
 }
 
-export default function AgentDetailPanel({ agent, onClose, logs = [], taskHistory = [] }: AgentDetailPanelProps) {
+export default function AgentDetailPanel({ agent, onClose, logs = [], taskHistory = [], toolHistory = [] }: AgentDetailPanelProps) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -48,6 +60,7 @@ export default function AgentDetailPanel({ agent, onClose, logs = [], taskHistor
   const roleMap: Record<string, string> = { planner: '任务规划分解', executor: '任务执行', reviewer: '结果审查' }
   const lastLogs = logs.slice(-5).reverse()
   const recentHistory = taskHistory.slice(-3).reverse()
+  const recentTools = toolHistory.slice(-10).reverse()
 
   return (
     <div className="fixed inset-0 z-50">
@@ -110,6 +123,37 @@ export default function AgentDetailPanel({ agent, onClose, logs = [], taskHistor
               </div>
             ) : (
               <p className="text-sm text-[var(--ink-muted)]">暂无日志</p>
+            )}
+          </div>
+
+          <div className="panel frame-surface frame-muted p-5">
+            <h4 className="edge-label mb-3">Tool calls</h4>
+            {recentTools.length > 0 ? (
+              <div className="space-y-2">
+                {recentTools.map((tool) => (
+                  <details key={tool.id} className="rounded-xl border border-[var(--line)] bg-[rgba(15,23,42,0.66)] p-3 text-sm">
+                    <summary className="cursor-pointer break-words font-mono text-[12px] leading-5 text-[var(--ink-soft)]">
+                      {tool.command}
+                      <span className="ml-2 text-xs text-[var(--ink-muted)]">
+                        exit={String(tool.exitCode)}
+                        {typeof tool.durationMs === 'number' ? ` · ${tool.durationMs}ms` : ''}
+                        {tool.status ? ` · ${tool.status}` : ''}
+                      </span>
+                    </summary>
+                    {tool.outputPreview ? (
+                      <pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded-lg bg-[rgba(2,6,23,0.66)] p-2 font-mono text-[11px] leading-5 text-[var(--ink-muted)]">
+                        {tool.outputPreview}
+                      </pre>
+                    ) : null}
+                    <p className="mt-1 text-[11px] text-[var(--ink-muted)]">
+                      {new Date(tool.timestamp).toLocaleTimeString()}
+                      {tool.turnId ? ` · turn ${String(tool.turnId).slice(0, 8)}` : ''}
+                    </p>
+                  </details>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-[var(--ink-muted)]">暂无 tool 调用</p>
             )}
           </div>
 

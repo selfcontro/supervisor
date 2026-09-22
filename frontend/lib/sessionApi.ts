@@ -92,6 +92,7 @@ export function subscribeToSession(socket: WebSocket, sessionId: string) {
           'command_output_delta',
           'approval_required',
           'approval_resolved',
+          'subagent_call',
         ],
       },
     })

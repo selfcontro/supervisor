@@ -104,6 +104,8 @@ class SessionStore {
       taskId: data.taskId || null,
       agentId: data.agentId || null,
       sessionId: session.id,
+      source: data.source || 'backend',
+      metadata: data.metadata || undefined,
       data
     })
 

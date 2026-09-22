@@ -233,7 +233,7 @@ test('resolveBrowserApiUrl falls back to derived local backend when legacy 3101 
     {}
   )
 
-  assert.equal(apiUrl, 'http://127.0.0.1:3001')
+  assert.equal(apiUrl, 'http://127.0.0.1:3101')
 })
 
 test('resolveBrowserWsUrl falls back to derived local backend websocket when legacy 3101 override is stale', () => {
@@ -262,7 +262,7 @@ test('resolveBrowserWsUrl falls back to derived local backend websocket when leg
     {}
   )
 
-  assert.equal(wsUrl, 'ws://127.0.0.1:3001')
+  assert.equal(wsUrl, 'ws://127.0.0.1:3101')
 })
 
 test('resolveBrowserApiUrl always prefers local backend on localhost pages regardless of saved override', () => {
@@ -293,7 +293,7 @@ test('resolveBrowserApiUrl always prefers local backend on localhost pages regar
     }
   )
 
-  assert.equal(apiUrl, 'http://127.0.0.1:3001')
+  assert.equal(apiUrl, 'http://127.0.0.1:3101')
 })
 
 test('resolveBrowserWsUrl always prefers local websocket on localhost pages regardless of saved override', () => {
@@ -324,7 +324,7 @@ test('resolveBrowserWsUrl always prefers local websocket on localhost pages rega
     }
   )
 
-  assert.equal(wsUrl, 'ws://localhost:3001')
+  assert.equal(wsUrl, 'ws://127.0.0.1:3101')
 })
 
 test('resolveBrowserApiUrl uses env local port when page is localhost', () => {
@@ -360,7 +360,7 @@ test('resolveBrowserWsUrl uses env local port when page is localhost', () => {
     }
   )
 
-  assert.equal(wsUrl, 'ws://localhost:3101')
+  assert.equal(wsUrl, 'ws://127.0.0.1:3101')
 })
 
 test('clearBrowserBackendOverride removes persisted override', () => {

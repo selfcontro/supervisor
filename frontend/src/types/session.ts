@@ -192,6 +192,23 @@ export interface ApprovalResolvedEvent {
   }
 }
 
+export interface SubagentCallEvent {
+  type: 'subagent_call'
+  sessionId: string
+  timestamp?: string
+  payload?: {
+    callId?: string
+    parentTaskId?: string | null
+    parentAgentId?: string | null
+    agentId?: string | null
+    stageId?: string | null
+    status?: string
+    title?: string
+    threadId?: string | null
+    turnId?: string | null
+  }
+}
+
 export type SessionSocketEvent =
   | AgentStatusEvent
   | TaskUpdateEvent
@@ -201,4 +218,5 @@ export type SessionSocketEvent =
   | CommandOutputDeltaEvent
   | ApprovalRequiredEvent
   | ApprovalResolvedEvent
+  | SubagentCallEvent
   | ControlEvent

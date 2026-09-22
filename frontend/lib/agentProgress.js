@@ -81,11 +81,19 @@ function findLatestCommand(logs, scope) {
     return false
   })
 
-  if (!match || typeof match.message !== 'string') {
+  if (!match) {
     return null
   }
 
-  return match.message.replace(/^\[[^\]]+\]\s*/, '').trim()
+  if (match.metadata && typeof match.metadata.command === 'string' && match.metadata.command.trim()) {
+    return match.metadata.command.trim()
+  }
+
+  if (typeof match.message !== 'string') {
+    return null
+  }
+
+  return match.message.replace(/^\[[^\]]+\]\s*/, '').split('\n')[0].trim() || null
 }
 
 function firstLine(value) {

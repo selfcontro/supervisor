@@ -226,12 +226,26 @@ class AgentRegistry {
       return null
     }
 
-    const current = agent.pendingApprovals.get(requestId) || null
-    if (current) {
-      agent.pendingApprovals.delete(requestId)
-      agent.updatedAt = new Date().toISOString()
+    // Request ids arrive as numbers over JSON-RPC but as strings via REST
+    // params. Map keys are type-sensitive, so try equivalent forms.
+    const candidates = [requestId]
+    const asString = String(requestId)
+    if (!candidates.includes(asString)) {
+      candidates.push(asString)
     }
-    return current
+    if (typeof requestId === 'string' && requestId.trim() !== '' && !Number.isNaN(Number(requestId))) {
+      candidates.push(Number(requestId))
+    }
+
+    for (const key of candidates) {
+      if (agent.pendingApprovals.has(key)) {
+        const current = agent.pendingApprovals.get(key)
+        agent.pendingApprovals.delete(key)
+        agent.updatedAt = new Date().toISOString()
+        return current
+      }
+    }
+    return null
   }
 
   closeAgent(sessionId, agentId) {

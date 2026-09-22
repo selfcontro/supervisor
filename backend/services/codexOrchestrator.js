@@ -1,5 +1,5 @@
-const { randomUUID } = require('node:crypto')
 const { serializeAgent } = require('./agentRegistry')
+const { JevOrchestrator } = require('./jevOrchestrator')
 
 class CodexOrchestrator {
   constructor(options) {
@@ -8,8 +8,10 @@ class CodexOrchestrator {
     this.blackboard = options.blackboard
     this.sessionStore = options.sessionStore
     this.broadcast = options.broadcast
+    this.jev = options.jev || new JevOrchestrator()
     this.autoApprovalMode = process.env.CODEX_AUTO_APPROVAL_MODE || 'manual'
     this.commandRuns = new Map()
+    this.turnTranscripts = new Map()
     this.teamWorkflows = new Map()
     this.teamTaskIndex = new Map()
     this.started = false
@@ -73,7 +75,8 @@ class CodexOrchestrator {
     })
 
     if (!agent.threadId) {
-      const threadResult = await this.client.startThread(this.buildThreadStartParams(agent))
+      const threadParams = this.buildThreadStartParams(agent)
+      const threadResult = await this.client.startThread(threadParams)
       const threadId = extractThreadId(threadResult)
 
       if (!threadId) {
@@ -81,6 +84,10 @@ class CodexOrchestrator {
       }
 
       this.registry.setThread(normalizedSessionId, agent.agentId, threadId)
+      const runtimeAgent = this.registry.getAgent(normalizedSessionId, agent.agentId)
+      if (runtimeAgent) {
+        runtimeAgent.model = threadParams.model
+      }
       await this.blackboard.appendEvent({
         sessionId: normalizedSessionId,
         agentId: agent.agentId,
@@ -272,6 +279,54 @@ class CodexOrchestrator {
       idempotencyKey: `${coordinator.sessionId}:${coordinator.agentId}:${parentTaskId}:assigned`
     })
 
+    const judgment = await this.jev.judgeSubagentNeed({ prompt, title })
+    this.emitSystemLog('info', `Jev orchestration decision: ${judgment.decision}`, {
+      kind: 'jev_judgment',
+      taskId: parentTaskId,
+      decision: judgment.decision,
+      source: judgment.source,
+      confidence: judgment.confidence,
+      probabilities: judgment.probabilities
+    }, coordinator.sessionId)
+
+    if (judgment.decision === 'none') {
+      const runtimeCoordinator = this.registry.getAgent(coordinator.sessionId, coordinator.agentId)
+      const turnResult = await this.client.startTurn({
+        threadId: runtimeCoordinator.threadId,
+        input: [{ type: 'text', text: prompt }]
+      })
+      const turnId = extractTurnId(turnResult)
+      this.registry.updateAgentState(coordinator.sessionId, coordinator.agentId, 'working', turnId)
+      this.registry.updateTask(coordinator.sessionId, coordinator.agentId, parentTaskId, {
+        status: 'executing',
+        turnId,
+        orchestration: 'jev_direct',
+        turnHistory: [turnId].filter(Boolean)
+      })
+      const directTask = this.registry.getTask(coordinator.sessionId, coordinator.agentId, parentTaskId)
+      this.syncRuntimeTaskToSession(coordinator.sessionId, coordinator.agentId, directTask)
+      this.emitTaskUpdate(coordinator.sessionId, parentTaskId, {
+        status: 'executing', turnId, agentId: coordinator.agentId, orchestration: 'jev_direct'
+      })
+      this.emitSubagentEvent(coordinator.sessionId, {
+        callId: parentTaskId,
+        parentTaskId,
+        agentId: coordinator.agentId,
+        status: 'skipped',
+        title: 'Jev selected direct execution',
+        reason: 'No subagent needed'
+      })
+      return {
+        taskId: parentTaskId,
+        turnId,
+        threadId: runtimeCoordinator.threadId,
+        status: 'accepted',
+        orchestration: 'jev_direct',
+        subagentsCreated: 0,
+        judgment
+      }
+    }
+
     const workflow = {
       sessionId: coordinator.sessionId,
       parentTaskId,
@@ -293,7 +348,9 @@ class CodexOrchestrator {
       taskId: parentTaskId,
       turnId: null,
       threadId: this.registry.getAgent(coordinator.sessionId, coordinator.agentId)?.threadId || null,
-      status: 'accepted'
+      status: 'accepted',
+      orchestration: judgment.decision,
+      judgment
     }
   }
 
@@ -317,6 +374,14 @@ class CodexOrchestrator {
     const stageTitle = `${workflow.title} · ${descriptor.name}`
     const stageTaskId = `${workflow.parentTaskId}:${stageId}`
     const stagePrompt = this.buildStagePrompt(workflow, stageId)
+    this.emitSubagentEvent(workflow.sessionId, {
+      callId: stageTaskId,
+      parentTaskId: workflow.parentTaskId,
+      agentId: stageRuntimeAgentId,
+      stageId,
+      status: 'starting',
+      title: stageTitle,
+    })
     await this.createOrActivateAgent(workflow.sessionId, stageRuntimeAgentId, {
       name: descriptor.name,
       role: descriptor.role,
@@ -409,6 +474,16 @@ class CodexOrchestrator {
     })
     this.emitAgentStatus(serializeAgent(this.registry.getAgent(workflow.sessionId, workflow.parentAgentId)))
     this.emitAgentStatus(serializeAgent(this.registry.getAgent(workflow.sessionId, stageRuntimeAgentId)))
+    this.emitSubagentEvent(workflow.sessionId, {
+      callId: stageTaskId,
+      parentTaskId: workflow.parentTaskId,
+      agentId: stageRuntimeAgentId,
+      stageId,
+      status: 'running',
+      title: stageTitle,
+      threadId: runtimeAgent.threadId,
+      turnId,
+    })
 
     return {
       taskId: stageTaskId,
@@ -664,6 +739,13 @@ class CodexOrchestrator {
       subTasks: getWorkflowSubTaskIds(workflow)
     })
 
+    this.sessionStore.addLog(workflow.sessionId, {
+      agentId: workflow.parentAgentId,
+      taskId: workflow.parentTaskId,
+      level: 'error',
+      message: `[${workflow.parentAgentId}] ${workflow.title} failed: ${error}`.slice(0, 500)
+    })
+
     if (updatedParentTask) {
       this.syncRuntimeTaskToSession(workflow.sessionId, workflow.parentAgentId, updatedParentTask)
       this.emitTaskUpdate(workflow.sessionId, workflow.parentTaskId, {
@@ -826,6 +908,101 @@ class CodexOrchestrator {
     return { ok: true, turnId }
   }
 
+  async tryModelFallback(agent, task, error, ids = {}) {
+    const runtimeAgent = this.registry.getAgent(agent.sessionId, agent.agentId)
+    if (!runtimeAgent || !task.prompt) {
+      return false
+    }
+
+    const current = runtimeAgent.model || resolvePrimaryModel(runtimeAgent)
+    const attempts = Array.isArray(task.modelAttempts) ? task.modelAttempts : []
+    const tried = new Set([...attempts, current])
+    const nextModel = [current, ...MODEL_FALLBACKS].find((model) => model && !tried.has(model) && model !== current)
+      || MODEL_FALLBACKS.find((model) => model && !tried.has(model))
+
+    if (!nextModel) {
+      return false
+    }
+
+    try {
+      const threadParams = this.buildThreadStartParams({
+        ...runtimeAgent,
+        harness: { ...runtimeAgent.harness, model: nextModel }
+      })
+      const threadResult = await this.client.startThread(threadParams)
+      const newThreadId = extractThreadId(threadResult)
+      if (!newThreadId) {
+        return false
+      }
+
+      this.registry.ensureAgent(runtimeAgent.sessionId, runtimeAgent.agentId, { harness: { model: nextModel } })
+      const updated = this.registry.getAgent(runtimeAgent.sessionId, runtimeAgent.agentId)
+      if (updated) {
+        updated.model = nextModel
+      }
+      this.registry.setThread(runtimeAgent.sessionId, runtimeAgent.agentId, newThreadId)
+
+      const turnResult = await this.client.startTurn({
+        threadId: newThreadId,
+        input: [{ type: 'text', text: task.prompt }]
+      })
+      const newTurnId = extractTurnId(turnResult)
+      const history = Array.isArray(task.turnHistory) ? task.turnHistory : []
+
+      const updatedTask = this.registry.updateTask(runtimeAgent.sessionId, runtimeAgent.agentId, task.taskId, {
+        status: 'executing',
+        turnId: newTurnId,
+        attempt: Number(task.attempt || 1) + 1,
+        error: null,
+        turnHistory: [...history, newTurnId].filter(Boolean),
+        modelAttempts: [...attempts, current, nextModel]
+      })
+      this.syncRuntimeTaskToSession(runtimeAgent.sessionId, runtimeAgent.agentId, updatedTask)
+      this.registry.setActiveTask(runtimeAgent.sessionId, runtimeAgent.agentId, task.taskId)
+      this.registry.updateAgentState(runtimeAgent.sessionId, runtimeAgent.agentId, 'working', newTurnId)
+      this.emitTaskUpdate(runtimeAgent.sessionId, task.taskId, {
+        status: 'executing',
+        turnId: newTurnId,
+        updatedAt: new Date().toISOString(),
+        agentId: runtimeAgent.agentId
+      })
+      this.emitAgentStatus(serializeAgent(this.registry.getAgent(runtimeAgent.sessionId, runtimeAgent.agentId)))
+
+      await this.blackboard.appendEvent({
+        sessionId: runtimeAgent.sessionId,
+        agentId: runtimeAgent.agentId,
+        threadId: newThreadId,
+        turnId: newTurnId,
+        type: 'task_progress',
+        task: {
+          taskId: task.taskId,
+          title: task.title,
+          status: 'executing',
+          priority: task.priority
+        },
+        payload: {
+          action: 'model_fallback',
+          from: current,
+          to: nextModel,
+          error
+        },
+        idempotencyKey: `${runtimeAgent.sessionId}:${runtimeAgent.agentId}:${task.taskId}:fallback:${nextModel}`
+      })
+
+      this.sessionStore.addLog(runtimeAgent.sessionId, {
+        agentId: runtimeAgent.agentId,
+        taskId: task.taskId,
+        level: 'warning',
+        message: `[${runtimeAgent.agentId}] ${current} at capacity, retrying ${task.title} on ${nextModel}`.slice(0, 300)
+      })
+
+      return true
+    } catch (fallbackError) {
+      this.emitSystemLog('warning', `Model fallback ${current} -> ${nextModel} failed: ${fallbackError.message}`)
+      return false
+    }
+  }
+
   async retry(sessionId, agentId, taskId) {
     this.ensureStarted()
     const agent = this.registry.getAgent(sessionId, agentId)
@@ -915,13 +1092,16 @@ class CodexOrchestrator {
   async respondApproval(sessionId, agentId, requestId, decision) {
     const pending = this.registry.resolvePendingApproval(sessionId, agentId, requestId)
     if (!pending) {
-      throw new Error('Approval request not found')
+      throw new Error('Approval request not found. It may have been resolved already or lost on backend restart.')
     }
 
     if (isApprovalAcceptedDecision(decision)) {
       this.resumeTaskAfterApproval(sessionId, agentId, pending.task)
     }
-    this.client.respond(requestId, {
+    // Respond with the original JSON-RPC id type (usually a number).
+    // The REST layer delivers it as a string, which the app-server would
+    // treat as an unmatched response.
+    this.client.respond(pending.requestId, {
       decision
     })
 
@@ -933,7 +1113,7 @@ class CodexOrchestrator {
       type: 'approval_resolved',
       task: pending.task,
       payload: {
-        requestId,
+        requestId: pending.requestId,
         decision
       }
     })
@@ -942,7 +1122,7 @@ class CodexOrchestrator {
       type: 'approval_resolved',
       sessionId,
       payload: {
-        requestId,
+        requestId: pending.requestId,
         agentId,
         decision
       }
@@ -1027,8 +1207,11 @@ class CodexOrchestrator {
       return
     }
 
-    if (method === 'turn/completed') {
-      const turnResult = extractTurnResult(params)
+    // NOTE: the app-server may report a failed turn via `turn/completed`
+    // with `turn.status === 'failed'` instead of `turn/failed`. Treat that
+    // as failure, otherwise failures masquerade as empty successful results.
+    if (method === 'turn/completed' && params?.turn?.status !== 'failed') {
+      const turnResult = extractTurnResult(params) || this.takeTranscript(threadId, turnId)
 
       if (task) {
         const updatedTask = this.registry.updateTask(agent.sessionId, agent.agentId, task.taskId, {
@@ -1073,8 +1256,19 @@ class CodexOrchestrator {
       return
     }
 
-    if (method === 'turn/failed' || method === 'turn/errored' || method === 'turn/error') {
+    if (method === 'turn/failed' || method === 'turn/errored' || method === 'turn/error'
+      || (method === 'turn/completed' && params?.turn?.status === 'failed')) {
       const error = extractError(params)
+      this.takeTranscript(threadId, turnId)
+
+      // Capacity errors are transient upstream rejections. Fail over to the
+      // next model automatically instead of surfacing a dead-end failure.
+      if (task && isCapacityError(error)) {
+        const fellBack = await this.tryModelFallback(agent, task, error, { threadId, turnId })
+        if (fellBack) {
+          return
+        }
+      }
 
       if (task) {
         const updatedTask = this.registry.updateTask(agent.sessionId, agent.agentId, task.taskId, {
@@ -1108,6 +1302,13 @@ class CodexOrchestrator {
             agentId: agent.agentId
           })
         }
+
+        this.sessionStore.addLog(agent.sessionId, {
+          agentId: agent.agentId,
+          taskId: task.taskId,
+          level: 'error',
+          message: `[${agent.agentId}] ${task.title} failed: ${error}`.slice(0, 500)
+        })
       }
 
       this.registry.setActiveTask(agent.sessionId, agent.agentId, null)
@@ -1119,7 +1320,19 @@ class CodexOrchestrator {
       return
     }
 
+    if (method === 'error') {
+      const rawError = params?.error
+      const message = typeof rawError === 'string'
+        ? rawError
+        : typeof rawError?.message === 'string'
+          ? rawError.message
+          : JSON.stringify(rawError || params || {})
+      this.emitSystemLog('warning', `Codex turn error [${agent.agentId}]: ${message.slice(0, 500)}`)
+      return
+    }
+
     if (method === 'item/started') {
+      this.captureSubagentEvent(agent, method, params)
       this.captureCommandStart(agent, params)
       return
     }
@@ -1130,8 +1343,63 @@ class CodexOrchestrator {
     }
 
     if (method === 'item/completed') {
+      this.captureSubagentEvent(agent, method, params)
+      this.captureAgentMessage(agent, params)
       await this.captureCommandCompleted(agent, params)
     }
+  }
+
+  captureSubagentEvent(agent, method, params) {
+    const item = params?.item || {}
+    const itemType = String(item.type || '').toLowerCase()
+    if (!itemType || itemType === 'agentmessage' || (!itemType.includes('agent') && !itemType.includes('subagent') && !itemType.includes('collab'))) {
+      return
+    }
+
+    const status = method === 'item/started' ? 'running' : String(item.status || 'completed')
+    const callId = String(item.id || params.itemId || `${extractThreadId(params)}:${extractTurnId(params)}`)
+    const childAgentId = item.agentId || item.recipient || item.targetAgentId || null
+    const title = item.name || item.toolName || item.command || childAgentId || 'subagent call'
+    this.emitSubagentEvent(agent.sessionId, {
+      callId,
+      parentAgentId: agent.agentId,
+      agentId: childAgentId,
+      status,
+      title: String(title),
+      threadId: extractThreadId(params),
+      turnId: extractTurnId(params),
+    })
+  }
+
+  captureAgentMessage(agent, params) {
+    const item = params?.item || {}
+    if (item.type !== 'agentMessage' || typeof item.text !== 'string' || !item.text) {
+      return
+    }
+
+    const key = transcriptKey(extractThreadId(params), extractTurnId(params))
+    const existing = this.turnTranscripts.get(key) || ''
+    this.turnTranscripts.set(key, `${existing}${existing ? '\n' : ''}${item.text}`.slice(-8000))
+
+    const task = this.registry.getActiveTask(agent.sessionId, agent.agentId)
+    this.sessionStore.addLog(agent.sessionId, {
+      agentId: agent.agentId,
+      taskId: task?.taskId || null,
+      level: 'info',
+      message: `[${agent.agentId}] ${item.text}`.slice(0, 1200),
+      metadata: {
+        kind: 'agent_message',
+        threadId: extractThreadId(params),
+        turnId: extractTurnId(params),
+      },
+    })
+  }
+
+  takeTranscript(threadId, turnId) {
+    const key = transcriptKey(threadId, turnId)
+    const transcript = this.turnTranscripts.get(key) || null
+    this.turnTranscripts.delete(key)
+    return transcript
   }
 
   async handleServerRequest(message) {
@@ -1261,6 +1529,22 @@ class CodexOrchestrator {
       startedAt: item.startedAt || new Date().toISOString(),
       output: ''
     })
+
+    const task = this.registry.getActiveTask(agent.sessionId, agent.agentId)
+    this.sessionStore.addLog(agent.sessionId, {
+      agentId: agent.agentId,
+      taskId: task?.taskId || null,
+      level: 'info',
+      message: `[${agent.agentId}] tool call: ${item.command || '(command)'}`.slice(0, 1200),
+      metadata: {
+        kind: 'tool_call',
+        command: item.command || '',
+        cwd: item.cwd || null,
+        status: 'started',
+        threadId: extractThreadId(params),
+        turnId: extractTurnId(params),
+      },
+    })
   }
 
   captureCommandDelta(agent, params) {
@@ -1323,7 +1607,13 @@ class CodexOrchestrator {
       output: ''
     }
 
-    const durationMs = item.durationMs || computeDuration(current.startedAt, item.completedAt)
+    // Fast commands often carry no per-chunk outputDelta; the completed item
+    // itself holds the full output in `aggregatedOutput`.
+    const output = current.output
+      || (typeof item.aggregatedOutput === 'string' ? item.aggregatedOutput : '')
+    const durationMs = typeof item.durationMs === 'number'
+      ? item.durationMs
+      : computeDuration(current.startedAt, item.completedAt)
     const exitCode = typeof item.exitCode === 'number' ? item.exitCode : null
     const status = item.status || (exitCode === 0 ? 'completed' : 'failed')
 
@@ -1347,7 +1637,7 @@ class CodexOrchestrator {
         status,
         exitCode,
         durationMs,
-        outputPreview: trimPreview(current.output)
+        outputPreview: trimPreview(output)
       },
       idempotencyKey: `${threadId}:${item.id}:command_completed`
     })
@@ -1370,7 +1660,7 @@ class CodexOrchestrator {
         status,
         exitCode,
         durationMs,
-        outputPreview: trimPreview(current.output),
+        outputPreview: trimPreview(output),
         turnId: current.turnId,
         threadId
       }
@@ -1387,11 +1677,11 @@ class CodexOrchestrator {
 
   buildThreadStartParams(agent) {
     const params = {
-      cwd: agent.harness.cwd || process.cwd()
-    }
-
-    if (agent.harness.model) {
-      params.model = agent.harness.model
+      cwd: agent.harness.cwd || process.cwd(),
+      // The local `codex` CLI config may pin a model the API rejects
+      // (e.g. gpt-6-astra on older CLI). Pin an explicitly working model
+      // unless the caller overrides it per-agent or via env.
+      model: resolvePrimaryModel(agent)
     }
 
     if (agent.harness.profile) {
@@ -1436,18 +1726,27 @@ class CodexOrchestrator {
     })
   }
 
-  emitSystemLog(level, message) {
-    this.broadcast({
-      type: 'log_entry',
-      sessionId: 'default',
-      payload: {
-        logId: `codex_system_${randomUUID()}`,
-        data: {
-          level,
-          message,
-          source: 'codex_orchestrator'
-        }
-      }
+  emitSubagentEvent(sessionId, data) {
+    const payload = {
+      ...data,
+      timestamp: new Date().toISOString(),
+    }
+    this.sessionStore.addLog(sessionId, {
+      level: data.status === 'failed' || data.status === 'error' ? 'error' : 'info',
+      message: `[subagent] ${data.status}: ${data.title || data.agentId || 'subagent call'}`,
+      taskId: data.parentTaskId || null,
+      agentId: data.agentId || data.parentAgentId || null,
+      metadata: { kind: 'subagent_call', ...payload },
+    })
+    this.broadcast({ type: 'subagent_call', sessionId, payload: data })
+  }
+
+  emitSystemLog(level, message, metadata = {}, sessionId = 'default') {
+    this.sessionStore.addLog(sessionId, {
+      level,
+      message,
+      source: 'codex_orchestrator',
+      metadata: { kind: 'system', ...metadata },
     })
   }
 
@@ -1719,7 +2018,7 @@ function inferWorkerDescriptors(workflow, breakdownResult = '') {
   const signalText = `${workflow.prompt}\n${breakdownResult}`.toLowerCase()
   const descriptors = []
   const seen = new Set()
-  const teamIntent = /\b(agent team|agent-team|multi-agent|swarm|orchestrat(e|ion)|workstreams?)\b/.test(signalText)
+  const teamIntent = /\b(agent team|agent-team|multi-agent|multiagent|swarm|orchestrat(e|ion)|workstreams?)\b/.test(signalText)
 
   const pushDescriptor = (stageId) => {
     if (!stageId || seen.has(stageId)) {
@@ -1921,6 +2220,30 @@ function extractError(source) {
 
 function commandKey(threadId, itemId) {
   return `${threadId || 'unknown'}:${itemId || 'unknown'}`
+}
+
+function transcriptKey(threadId, turnId) {
+  return `${threadId || 'unknown'}:${turnId || 'unknown'}`
+}
+
+const MODEL_FALLBACKS = ['gpt-5.6-terra', 'gpt-5.6-sol']
+
+function resolvePrimaryModel(agent) {
+  const harnessModel = agent?.harness?.model
+  if (typeof harnessModel === 'string' && harnessModel.trim()) {
+    return harnessModel.trim()
+  }
+  if (typeof process.env.CODEX_MODEL === 'string' && process.env.CODEX_MODEL.trim()) {
+    return process.env.CODEX_MODEL.trim()
+  }
+  return 'gpt-5.6-sol'
+}
+
+function isCapacityError(error) {
+  if (typeof error !== 'string' || !error) {
+    return false
+  }
+  return /at capacity|overloaded|rate.?limit|429|try a different model|temporarily unavailable|service unavailable|503/i.test(error)
 }
 
 function trimPreview(value) {
